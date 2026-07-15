@@ -24,7 +24,7 @@ jobs:
     strategy:
       matrix:
         board: [pi-zero-w, pi-zero-2w]
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
