@@ -95,18 +95,20 @@ jobs:
         env:
           PKG_CONFIG_ALLOW_CROSS: 1
           PKG_CONFIG_PATH: /usr/lib/arm-linux-gnueabihf/pkgconfig
+        working-directory: PWNGHOST-RS
 
       - name: Copy binaries to staging
         run: |
           mkdir -p artifacts/${{ matrix.target }}
           cp target/${{ matrix.target }}/release/pwnghost-rs artifacts/${{ matrix.target }}/
           find target/${{ matrix.target }}/release -maxdepth 1 -type f -executable -name "pwn*" -exec cp {} artifacts/${{ matrix.target }}/ \;
+        working-directory: PWNGHOST-RS
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: pwnghost-rs-${{ matrix.target }}
-          path: artifacts/${{ matrix.target }}/
+          path: PWNGHOST-RS/artifacts/${{ matrix.target }}/
           retention-days: 7
 
   build-image:
@@ -137,7 +139,7 @@ jobs:
 
       - name: Build Docker image with Debian bookworm
         run: |
-          docker build -t pwnghost-rs-builder -f Dockerfile.builder .
+          docker build -t pwnghost-rs-builder -f PWNGHOST-RS/Dockerfile.builder .
 
       - name: Build SD card image with pi-gen
         run: |
