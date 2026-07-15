@@ -31,9 +31,16 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Debug workspace contents
+        run: |
+          ls -la
+          echo "---"
+          ls -la PWNGHOST-RS/ 2>/dev/null || echo "PWNGHOST-RS not found"
+          ls -la pi-gen/ 2>/dev/null || echo "pi-gen not found"
+
       - name: Build Docker image with Debian bookworm
         run: |
-          docker build -t pwnghost-rs-builder -f Dockerfile.builder .
+          docker build -t pwnghost-rs-builder -f PWNGHOST-RS/Dockerfile.builder .
 
       - name: Build SD card image with pi-gen
         run: |
