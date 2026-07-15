@@ -53,10 +53,6 @@ RUN apt-get update && apt-get install -y \
     libssl-dev:armhf \
     libudev-dev:armhf \
     libsqlite3-dev:armhf \
-    pkg-config \
-    libssl-dev:armhf \
-    libudev-dev:armhf \
-    libsqlite3-dev:armhf \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust for cross-compilation
