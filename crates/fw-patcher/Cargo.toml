@@ -6,11 +6,12 @@ description = "Firmware patcher for BCM43436B0 (CoderFX 8-layer patches)"
 
 [dependencies]
 anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true }
-serde = { workspace = true }
 tokio = { workspace = true }
 libc = { workspace = true }
 

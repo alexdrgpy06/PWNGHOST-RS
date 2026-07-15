@@ -1,0 +1,10 @@
+C:\Users\alex0\pwnagotchi-rust-rework\PWNGHOST-RS\target\debug\deps\mlua_sys-e3ee56398b62b368.d: C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lib.rs C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\macros.rs C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\mod.rs C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\lauxlib.rs C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\lua.rs C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\lualib.rs
+
+C:\Users\alex0\pwnagotchi-rust-rework\PWNGHOST-RS\target\debug\deps\libmlua_sys-e3ee56398b62b368.rmeta: C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lib.rs C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\macros.rs C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\mod.rs C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\lauxlib.rs C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\lua.rs C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\lualib.rs
+
+C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lib.rs:
+C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\macros.rs:
+C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\mod.rs:
+C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\lauxlib.rs:
+C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\lua.rs:
+C:\Users\alex0\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mlua-sys-0.6.8\src\lua54\lualib.rs:
