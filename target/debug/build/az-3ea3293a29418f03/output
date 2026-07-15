@@ -1,0 +1,6 @@
+$ mkdir -p "C:\\Users\\alex0\\pwnagotchi-rust-rework\\PWNGHOST-RS\\target\\debug\\build\\az-3ea3293a29418f03\\out\\try_track_caller"
+$ cd "C:\\Users\\alex0\\pwnagotchi-rust-rework\\PWNGHOST-RS\\target\\debug\\build\\az-3ea3293a29418f03\\out\\try_track_caller"
+$ printf '%s' "// try_tra"... > "C:\\Users\\alex0\\pwnagotchi-rust-rework\\PWNGHOST-RS\\target\\debug\\build\\az-3ea3293a29418f03\\out\\try_track_caller\\try_track_caller.rs"
+$ "C:\\Users\\alex0\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\bin\\rustc.exe" "try_track_caller.rs" "--emit=dep-info,metadata" >& /dev/null
+cargo:rustc-cfg=track_caller
+$ rm -r "C:\\Users\\alex0\\pwnagotchi-rust-rework\\PWNGHOST-RS\\target\\debug\\build\\az-3ea3293a29418f03\\out\\try_track_caller"

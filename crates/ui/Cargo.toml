@@ -1,0 +1,16 @@
+[package]
+name = "ui"
+version = "0.1.0"
+edition = "2021"
+description = "UI components for PWNGHOST-RS"
+
+[dependencies]
+anyhow = { workspace = true }
+embedded-graphics = { workspace = true }
+ssd1306 = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+pwncore = { path = "../pwncore" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

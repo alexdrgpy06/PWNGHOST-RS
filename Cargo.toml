@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pwncore",
+    "crates/fw-patcher",
+    "crates/angryoxide",
+    "crates/config",
+    "crates/agent",
+    "crates/rl-agent",
+    "crates/radio",
+    "crates/ui/display",
+    "crates/ui/web",
+    "crates/pwnghost-rs",
+]
+
+[workspace.dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "1.0"
+clap = { version = "4.0", features = ["derive", "env"] }
+figment = { version = "0.10", features = ["toml", "env"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+mlua = { version = "0.10", features = ["lua54", "vendored", "send"] }
+axum = { version = "0.7", features = ["ws"] }
+tera = "1.0"
+tower-http = { version = "0.6", features = ["cors"] }
+embedded-graphics = "0.8"
+ssd1306 = { version = "0.10", features = ["async", "graphics"] }
+ndarray = "0.16"
+safetensors = "0.5"
+zbus = "4.0"
+zbus_xmlgen = "4.0"
+dbus = "0.9"
+libc = "0.2"
+rand = "0.8"
+mac-addr = "0.3"
+proptest = "1.0"
+tempfile = "3.0"
+hex = "0.4"
+base64 = "0.21"
+sha2 = "0.10"
+async-trait = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "abort"
+
+[profile.dev]
+debug = true

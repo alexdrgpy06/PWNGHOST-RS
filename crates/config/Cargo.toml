@@ -1,0 +1,15 @@
+[package]
+name = "config"
+version = "0.1.0"
+edition = "2021"
+description = "Configuration loading for PWNGHOST-RS"
+
+[dependencies]
+anyhow = { workspace = true }
+figment = { version = "0.10", features = ["toml", "env", "json"] }
+serde = { workspace = true }
+tokio = { workspace = true }
+pwncore = { path = "../pwncore" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

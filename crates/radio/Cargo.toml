@@ -1,0 +1,23 @@
+[package]
+name = "radio"
+version = "0.1.0"
+edition = "2021"
+description = "Radio mode manager for PWNGHOST-RS (RAGE/BT/SAFE)"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+pwncore = { path = "../pwncore" }
+fw-patcher = { path = "../fw-patcher" }
+
+# D-Bus dependencies (Linux only)
+zbus = { workspace = true, optional = true }
+zbus_xmlgen = { workspace = true, optional = true }
+dbus = { workspace = true, optional = true }
+
+[features]
+default = []
+bluetooth = ["zbus", "zbus_xmlgen", "dbus"]

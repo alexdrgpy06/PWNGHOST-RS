@@ -1,0 +1,24 @@
+[package]
+name = "ui-display"
+version = "0.1.0"
+edition = "2021"
+description = "E-ink display driver for PWNGHOST-RS"
+
+[dependencies]
+anyhow = { workspace = true }
+embedded-graphics = { workspace = true }
+ssd1306 = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+pwncore = { path = "../../pwncore" }
+async-trait = { workspace = true }
+
+# rppal only available on Linux (Raspberry Pi)
+rppal = { version = "0.22", optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+default = []
+linux-gpio = ["rppal"]

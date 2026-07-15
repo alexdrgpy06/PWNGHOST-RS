@@ -1,0 +1,121 @@
+//! Rollout buffer for RL training
+
+use anyhow::Result;
+use crate::features::Features;
+use crate::policy::RlAction;
+
+/// Transition stored in rollout buffer
+#[derive(Debug, Clone)]
+pub struct Transition {
+    pub features: Features,
+    pub action: RlAction,
+    pub reward: f32,
+    pub value: f32,
+    pub log_prob: f32,
+    pub done: bool,
+}
+
+/// Rollout buffer for PPO/A2C
+pub struct RolloutBuffer {
+    transitions: Vec<Transition>,
+    capacity: usize,
+}
+
+impl RolloutBuffer {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            transitions: Vec::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    pub fn push(&mut self, features: Features, action: RlAction, reward: f32, done: bool) {
+        let transition = Transition {
+            features,
+            action,
+            reward,
+            value: 0.0, // Will be filled during GAE computation
+            log_prob: 0.0,
+            done,
+        };
+
+        self.transitions.push(transition);
+
+        // If buffer full, could implement circular buffer or just clear
+        if self.transitions.len() >= self.capacity {
+            // For now, just keep adding (in real implementation, use circular buffer)
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.transitions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.transitions.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.transitions.clear();
+    }
+
+    /// Get all transitions for training
+    pub fn get_transitions(&self) -> &[Transition] {
+        &self.transitions
+    }
+
+    /// Compute advantages using GAE
+    pub fn compute_advantages(&mut self, gamma: f32, gae_lambda: f32, last_value: f32) {
+        let mut advantages = Vec::with_capacity(self.transitions.len());
+        let mut next_advantage = 0.0f32;
+
+        for transition in self.transitions.iter().rev() {
+            let delta = transition.reward + gamma * last_value * (1.0 - transition.done as u8 as f32) - transition.value;
+            next_advantage = delta + gamma * gae_lambda * (1.0 - transition.done as u8 as f32) * next_advantage;
+            advantages.push(next_advantage);
+            last_value = transition.value;
+        }
+
+        advantages.reverse();
+
+        for (i, transition) in self.transitions.iter_mut().enumerate() {
+            // In real implementation, store advantage and return
+            // For now, just compute
+        }
+    }
+}
+
+impl Default for RolloutBuffer {
+    fn default() -> Self {
+        Self::new(2048)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_buffer_new() {
+        let buffer = RolloutBuffer::new(100);
+        assert_eq!(buffer.capacity, 100);
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_buffer_push() {
+        let mut buffer = RolloutBuffer::new(10);
+        let features = crate::features::Features::new();
+        buffer.push(features, crate::policy::RlAction::Wait, 1.0, false);
+        assert_eq!(buffer.len(), 1);
+    }
+
+    #[test]
+    fn test_buffer_clear() {
+        let mut buffer = RolloutBuffer::new(10);
+        let features = crate::features::Features::new();
+        buffer.push(features, crate::policy::RlAction::Wait, 1.0, false);
+        buffer.clear();
+        assert!(buffer.is_empty());
+    }
+}

@@ -1,0 +1,7 @@
+IMG_NAME="pwnghost-rs"
+TARGET_HOSTNAME="pwnghost"
+TARGET_USERNAME="pwn"
+TARGET_PASSWORD="pwnagotchi"
+
+# Include base config
+include config

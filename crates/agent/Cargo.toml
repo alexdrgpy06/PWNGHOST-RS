@@ -1,0 +1,21 @@
+[package]
+name = "agent"
+version = "0.1.0"
+edition = "2021"
+description = "Main agent loop for PWNGHOST-RS"
+
+[dependencies]
+angryoxide = { path = "../angryoxide" }
+pwncore = { path = "../pwncore" }
+config = { path = "../config" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+mlua = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+rand = { workspace = true }
+mac-addr = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

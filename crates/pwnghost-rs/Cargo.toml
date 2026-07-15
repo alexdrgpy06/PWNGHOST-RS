@@ -1,0 +1,24 @@
+[package]
+name = "pwnghost-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Main binary for PWNGHOST-RS"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { version = "4.4", features = ["derive", "env"] }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+pwncore = { path = "../pwncore" }
+config = { path = "../config" }
+agent = { path = "../agent" }
+fw-patcher = { path = "../fw-patcher" }
+angryoxide = { path = "../angryoxide" }
+radio = { path = "../radio" }
+rl-agent = { path = "../rl-agent" }
+ui-display = { path = "../ui/display" }
+ui-web = { path = "../ui/web" }
+
+[build-dependencies]
+anyhow = { workspace = true }

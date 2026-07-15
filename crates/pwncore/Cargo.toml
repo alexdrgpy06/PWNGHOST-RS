@@ -1,0 +1,17 @@
+[package]
+name = "pwncore"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+description = "Core domain types for PwnGhost-RS"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

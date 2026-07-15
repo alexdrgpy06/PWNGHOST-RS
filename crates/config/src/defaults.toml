@@ -1,0 +1,196 @@
+# PWNGHOST-RS Default Configuration
+# This file is embedded in the config crate and provides all default values
+
+[main]
+name = "pwnghost"
+lang = "en"
+iface = "wlan0"
+mon_start_cmd = "/usr/bin/monstart"
+mon_stop_cmd = "/usr/bin/monstop"
+mon_max_blind_epochs = 5
+no_restart = false
+whitelist = []
+confd = "/etc/pwnghost/conf.d/"
+custom_plugin_repos = []
+custom_plugins = "/usr/local/share/pwnghost/custom-plugins/"
+
+[main.log]
+path = "/etc/pwnghost/log/pwnghost.log"
+path_debug = "/etc/pwnghost/log/pwnghost-debug.log"
+
+[main.log.rotation]
+enabled = true
+size = "10M"
+
+[personality]
+bored_num_epochs = 50
+sad_num_epochs = 100
+angry_num_epochs = 200
+lonely_num_epochs = 150
+bond_encounters_factor = 1.0
+max_interactions = 10
+throttle = 30
+reward_handshake = 100
+reward_new_ap = 10
+reward_association = 5
+penalty_missed = -10
+penalty_reboot = -50
+min_recon_time = 5
+max_recon_time = 30
+hop_recon_time = 10
+deauth = false
+associate = false
+min_rssi = -80
+position_x = 0
+position_y = 34
+frame_padding = true
+frame_padding_min_bytes = 650
+
+[personality.faces]
+look_r = ["( ⚆_⚆)"]
+look_l = ["(☉_☉ )"]
+look_r_happy = ["( ◕‿◕)", "( ≧◡≦)"]
+look_l_happy = ["(◕‿◕ )", "(≧◡≦ )"]
+sleep = ["(⇀‿‿↼)", "(≖‿‿≖)", "(－_－)"]
+awake = ["(◕‿‿◕)"]
+bored = ["(-__-)", "(—__—)"]
+intense = ["(°▃▃°)", "(°ロ°)"]
+cool = ["(⌐■_■)", "(单__单)"]
+happy = ["(•‿‿•)", "(^‿‿^)", "(^◡◡^)"]
+excited = ["(ᵔ◡◡ᵔ)", "(✜‿‿✜)"]
+grateful = ["(^‿‿^)"]
+motivated = ["(☼‿‿☼)", "(★‿★)", "(•̀ᴗ•́)"]
+demotivated = ["(≖__≖)", "(￣ヘ￣)", "(¬_¬)"]
+smart = ["(✜‿‿✜)"]
+lonely = ["(ب__ب)", "(｡•́︿•̀｡)", "(︶︹︺)"]
+sad = ["(╥☁╥ )", "(╥﹏╥)", "(ಥ﹏ಥ)"]
+angry = ["(-_-')", "(⇀__⇀)", "(`___´)"]
+friend = ["(♥‿‿♥)", "(♡‿‿♡)", "(♥‿♥ )", "(♥ω♥ )"]
+broken = ["(☓‿‿☓)"]
+upload = ["(1__0)", "(1__1)", "(0__1)"]
+png = false
+
+[ui.web]
+enabled = true
+address = "0.0.0.0"
+auth = false
+username = "changeme"
+password = "changeme"
+origin = ""
+port = 8080
+on_frame = ""
+
+[ui.web.theme]
+accent_r = 76
+accent_g = 175
+accent_b = 80
+
+[ui.display]
+enabled = true
+rotation = 180
+display_type = "waveshare_v4"
+
+[ui.faces]
+png = true
+position_x = 0
+position_y = 16
+
+[bettercap]
+handshakes = "/etc/pwnghost/handshakes"
+silence = [
+    "ble.device.new",
+    "ble.device.lost",
+    "ble.device.service.discovered",
+    "ble.device.characteristic.discovered",
+    "ble.device.disconnected",
+    "ble.device.connected",
+    "ble.connection.timeout",
+    "wifi.client.new",
+    "wifi.client.lost",
+    "wifi.client.probe",
+    "wifi.ap.new",
+    "wifi.ap.lost",
+    "mod.started",
+]
+
+[fs]
+enabled = true
+
+[fs.mounts.log]
+enabled = true
+mount = "/etc/pwnghost/log/"
+size = "50M"
+sync = 60
+zram = true
+rsync = true
+
+[fs.mounts.data]
+enabled = true
+mount = "/var/tmp/pwnghost"
+size = "10M"
+sync = 3600
+zram = true
+rsync = true
+
+[plugins.auto_tune]
+enabled = true
+
+[plugins.auto_backup]
+enabled = true
+
+[plugins.auto_update]
+enabled = true
+
+[plugins.bt_tether]
+enabled = false
+
+[plugins.cache]
+enabled = true
+
+[plugins.fix_services]
+enabled = true
+
+[plugins.gpio_buttons]
+enabled = false
+
+[plugins.gps]
+enabled = false
+
+[plugins.grid]
+enabled = true
+
+[plugins.logtail]
+enabled = false
+
+[plugins.memtemp]
+enabled = false
+
+[plugins.ohcapi]
+enabled = false
+
+[plugins.pisugarx]
+enabled = false
+
+[plugins.pwncrack]
+enabled = false
+
+[plugins.session_stats]
+enabled = false
+
+[plugins.ups_lite]
+enabled = false
+
+[plugins.webcfg]
+enabled = true
+
+[plugins.pwnstore_ui]
+enabled = true
+
+[plugins.webgpsmap]
+enabled = false
+
+[plugins.wigle]
+enabled = false
+
+[plugins.wpa_sec]
+enabled = false

@@ -1,0 +1,1 @@
+//! pwnghost-rs crate
