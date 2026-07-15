@@ -70,22 +70,18 @@ ENV PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
 
 WORKDIR /workspace
 
-# Copy pi-gen
-COPY pi-gen /workspace/pi-gen
-
-# Copy Rust workspace
-COPY PWNGHOST-RS /workspace/PWNGHOST-RS
+# Copy pi-gen and Rust workspace (the current directory IS the workspace)
+COPY . /workspace
 
 # Build Rust workspace for both targets
 RUN . "$HOME/.cargo/env" && \
-    cd /workspace/PWNGHOST-RS && \
     cargo build --release --target arm-unknown-linux-gnueabihf --workspace && \
     cargo build --release --target armv7-unknown-linux-gnueabihf --workspace
 
 # Copy built binaries to a known location for pi-gen stages
 RUN mkdir -p /workspace/artifacts/arm-unknown-linux-gnueabihf /workspace/artifacts/armv7-unknown-linux-gnueabihf && \
-    cp /workspace/PWNGHOST-RS/target/arm-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/arm-unknown-linux-gnueabihf/ && \
-    cp /workspace/PWNGHOST-RS/target/armv7-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/armv7-unknown-linux-gnueabihf/
+    cp /workspace/target/arm-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/arm-unknown-linux-gnueabihf/ && \
+    cp /workspace/target/armv7-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/armv7-unknown-linux-gnueabihf/
 
 # Build the SD card image
 CMD ["/bin/bash", "-c", "cd /workspace/pi-gen && ./build.sh"]
