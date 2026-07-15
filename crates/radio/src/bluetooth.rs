@@ -87,7 +87,7 @@ async fn connect_pan_dbus(mac: &str) -> Result<()> {
             "--system",
             "--dest=org.bluez",
             "--type=method_call",
-            "/org/bluez/hci0/dev_XX_XX_XX_XX_XX_XX".replace("XX_XX_XX_XX_XX_XX", &mac.replace(':', "_")),
+            &format!("/org/bluez/hci0/dev_{}", mac.replace(':', "_")),
             "org.bluez.Network1.Connect",
             "string:nap",
         ])

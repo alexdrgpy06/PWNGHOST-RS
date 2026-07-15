@@ -7,11 +7,12 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use mac_addr::MacAddr;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::net::MacAddr;
 use uuid::Uuid;
 
-/// 802.11 encryption types
+/// IEEE 802.11 encryption types
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum EncryptionType {
@@ -222,7 +223,7 @@ impl Mood {
     /// Get a random face for this mood
     pub fn random_face(&self) -> &'static str {
         let faces = self.faces();
-        let idx = rand::random::<usize>() % faces.len();
+        let idx = rand::thread_rng().gen_range(0..faces.len());
         faces[idx]
     }
 }

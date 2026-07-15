@@ -11,7 +11,6 @@ pub use recovery::RecoveryManager;
 pub use spawn::{spawn_angryoxide, AngryOxideHandle};
 
 use anyhow::Result;
-use pwncore::PwnConfig;
 use tracing::info;
 
 /// Initialize AngryOxide with config
@@ -27,7 +26,30 @@ mod tests {
 
     #[test]
     fn test_module_structure() {
-        // Verify exports exist
-        let _ = AngryOxideEvent::AccessPointFound { bssid: "aa:bb:cc:dd:ee:ff".parse().unwrap(), ssid: None, channel: 1, rssi: -50, encryption: "WPA2".to_string(), vendor: String::new() };
+        // Verify the crate modules are accessible
+        let _ = parser::AngryOxideEvent::Ap(parser::ApEvent {
+            bssid: [0xaa; 6],
+            ssid: None,
+            channel: 1,
+            rssi: -50,
+            encryption: parser::EncryptionType::Wpa2,
+            vendor: None,
+            distance: None,
+            clients: vec![],
+            first_seen: 0,
+            last_seen: 0,
+            beacon: 0,
+            beacon_interval: 100,
+        });
+    }
+
+    #[test]
+    fn test_ao_event_display() {
+        let event = parser::AngryOxideEvent::Status(parser::StatusEvent {
+            level: "info".to_string(),
+            message: "AngryOxide started".to_string(),
+            timestamp: 1000,
+        });
+        let _ = format!("{:?}", event);
     }
 }

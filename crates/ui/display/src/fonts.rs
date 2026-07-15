@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 /// Font registry
 pub struct FontRegistry {
-    fonts: HashMap<String, &'static MonoFont>,
+    fonts: HashMap<String, &'static MonoFont<'static>>,
 }
 
 impl FontRegistry {
@@ -22,27 +22,27 @@ impl FontRegistry {
         // self.fonts.insert("kaomoji".to_string(), KAOMOJI_FONT);
     }
 
-    pub fn get(&self, name: &str) -> Option<&'static MonoFont> {
+    pub fn get(&self, name: &str) -> Option<&'static MonoFont<'static>> {
         self.fonts.get(name).copied()
     }
 
-    pub fn register(&mut self, name: String, font: &'static MonoFont) {
+    pub fn register(&mut self, name: String, font: &'static MonoFont<'static>) {
         self.fonts.insert(name, font);
     }
 }
 
 /// Get default font for UI
-pub fn default_font() -> Option<&'static MonoFont> {
+pub fn default_font() -> Option<&'static MonoFont<'static>> {
     None // Would return actual font in real implementation
 }
 
 /// Get bold font for headers
-pub fn bold_font() -> Option<&'static MonoFont> {
+pub fn bold_font() -> Option<&'static MonoFont<'static>> {
     None
 }
 
 /// Get small font for status
-pub fn small_font() -> Option<&'static MonoFont> {
+pub fn small_font() -> Option<&'static MonoFont<'static>> {
     None
 }
 

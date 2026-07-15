@@ -38,7 +38,7 @@ impl Default for LayoutConfig {
 /// Layout engine for drawing pwnagotchi frames
 pub struct LayoutEngine {
     config: LayoutConfig,
-    fonts: HashMap<String, &'static MonoFont>,
+    fonts: HashMap<String, &'static MonoFont<'static>>,
 }
 
 impl LayoutEngine {

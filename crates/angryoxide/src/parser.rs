@@ -21,6 +21,9 @@ pub enum AngryOxideEvent {
     Status(StatusEvent),
 }
 
+/// Legacy alias for backward compatibility
+pub type AoEvent = AngryOxideEvent;
+
 /// Access point event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApEvent {

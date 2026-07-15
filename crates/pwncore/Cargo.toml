@@ -12,6 +12,8 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
+rand = { workspace = true }
+mac-addr = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 proptest = { workspace = true }

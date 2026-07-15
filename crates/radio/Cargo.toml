@@ -9,9 +9,10 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+nix = { version = "0.28", optional = true }
+libc = { version = "0.2", optional = true }
 
 pwncore = { path = "../pwncore" }
-fw-patcher = { path = "../fw-patcher" }
 
 # D-Bus dependencies (Linux only)
 zbus = { workspace = true, optional = true }
@@ -21,3 +22,4 @@ dbus = { workspace = true, optional = true }
 [features]
 default = []
 bluetooth = ["zbus", "zbus_xmlgen", "dbus"]
+linux-gpio = ["nix", "libc"]

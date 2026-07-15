@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Enable monitor mode on interface
 pub async fn set_monitor_mode(iface: &str, enable: bool) -> Result<()> {
@@ -89,7 +89,7 @@ pub async fn scan_channels(iface: &str) -> Result<Vec<u8>> {
         .context("Failed to scan channels")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut channels = Vec::new();
+    let mut channels: Vec<u8> = Vec::new();
 
     for line in stdout.lines() {
         if line.contains("Channel") || line.contains("channel") {

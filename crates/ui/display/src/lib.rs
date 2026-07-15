@@ -6,7 +6,7 @@ pub mod fonts;
 
 pub use driver::{DisplayDriver, DisplayConfig};
 pub use layout::{LayoutEngine, LayoutConfig};
-pub use fonts::{FontManager, FontConfig};
+pub use fonts::FontRegistry;
 
 use anyhow::Result;
 use pwncore::Mood;

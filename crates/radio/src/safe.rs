@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Connect to known WiFi network
 pub async fn connect_known_wifi(ssid: &str, password: &str) -> Result<()> {

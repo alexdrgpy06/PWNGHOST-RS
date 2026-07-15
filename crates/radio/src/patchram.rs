@@ -1,7 +1,6 @@
 //! BCM43436B0 patchram loader for Bluetooth firmware
 
 use anyhow::Result;
-use std::process::Command;
 use tokio::process::Command as AsyncCommand;
 use tracing::{info, warn};
 

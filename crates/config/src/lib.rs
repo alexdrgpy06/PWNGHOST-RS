@@ -4,7 +4,7 @@ pub mod migrate;
 pub mod schema;
 
 pub use migrate::migrate_config;
-pub use schema::{PwnConfig, load_config, save_config, default_config};
+pub use schema::PwnConfig;
 
 use anyhow::Result;
 use figment::providers::{Env, Format, Toml};
