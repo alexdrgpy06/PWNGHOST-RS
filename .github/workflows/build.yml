@@ -96,7 +96,7 @@ jobs:
           PKG_CONFIG_ALLOW_CROSS: 1
           PKG_CONFIG_PATH: /usr/lib/arm-linux-gnueabihf/pkgconfig
 
-      - name: Copy binaries to artifacts
+      - name: Copy binaries to staging
         run: |
           mkdir -p artifacts/${{ matrix.target }}
           cp target/${{ matrix.target }}/release/pwnghost-rs artifacts/${{ matrix.target }}/
@@ -135,9 +135,8 @@ jobs:
           name: pwnghost-rs-armv7-unknown-linux-gnueabihf
           path: artifacts/armv7-unknown-linux-gnueabihf
 
-      - name: Build SD card image with pi-gen (Debian bookworm)
+      - name: Build Docker image with Debian bookworm
         run: |
-          # Build Docker image with Debian bookworm (has armhf packages)
           docker build -t pwnghost-rs-builder -f Dockerfile.builder .
 
       - name: Build SD card image with pi-gen
