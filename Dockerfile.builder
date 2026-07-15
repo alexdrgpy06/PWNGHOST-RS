@@ -1,5 +1,5 @@
 # Dockerfile for building PWNGHOST-RS SD card image using pi-gen
-# Based on Debian bookworm (which has armhf packages) instead of Ubuntu noble
+# Based on Debian bookworm (Raspberry Pi OS base) - has proper armhf packages
 
 FROM debian:bookworm-slim
 
