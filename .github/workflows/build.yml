@@ -18,124 +18,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  cross-compile:
-    name: Cross-compile Rust workspace
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - arm-unknown-linux-gnueabihf    # Pi Zero W (ARMv6)
-          - armv7-unknown-linux-gnueabihf  # Pi Zero 2W (ARMv7)
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install cross-compilation dependencies
-        run: |
-          sudo dpkg --add-architecture armhf
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-arm-linux-gnueabihf \
-            g++-arm-linux-gnueabihf \
-            libc6-dev:armhf \
-            libstdc++-12-dev:armhf \
-            pkg-config \
-            libssl-dev:armhf \
-            libudev-dev:armhf \
-            libsqlite3-dev:armhf \
-            libclang-dev \
-            llvm \
-            lld
-
-      - name: Setup cargo config for cross-compilation
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml << 'EOF'
-          [target.arm-unknown-linux-gnueabihf]
-          linker = "arm-linux-gnueabihf-gcc"
-          rustflags = [
-            "-C", "link-arg=-fuse-ld=lld",
-            "-C", "target-cpu=arm1176jzf-s",
-            "-C", "link-arg=-Wl,--as-needed"
-          ]
-
-          [target.armv7-unknown-linux-gnueabihf]
-          linker = "arm-linux-gnueabihf-gcc"
-          rustflags = [
-            "-C", "link-arg=-fuse-ld=lld",
-            "-C", "target-cpu=cortex-a53",
-            "-C", "link-arg=-Wl,--as-needed"
-          ]
-
-          [build]
-          target = "${{ matrix.target }}"
-          EOF
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ matrix.target }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Build workspace
-        run: |
-          cargo build --release --target ${{ matrix.target }} --workspace
-        env:
-          PKG_CONFIG_ALLOW_CROSS: 1
-          PKG_CONFIG_PATH: /usr/lib/arm-linux-gnueabihf/pkgconfig
-        working-directory: PWNGHOST-RS
-
-      - name: Copy binaries to staging
-        run: |
-          mkdir -p artifacts/${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/pwnghost-rs artifacts/${{ matrix.target }}/
-          find target/${{ matrix.target }}/release -maxdepth 1 -type f -executable -name "pwn*" -exec cp {} artifacts/${{ matrix.target }}/ \;
-        working-directory: PWNGHOST-RS
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: pwnghost-rs-${{ matrix.target }}
-          path: PWNGHOST-RS/artifacts/${{ matrix.target }}/
-          retention-days: 7
-
   build-image:
     name: Build SD card image with pi-gen (Debian bookworm)
-    needs: cross-compile
     runs-on: ubuntu-latest
     strategy:
       matrix:
         board: [pi-zero-w, pi-zero-2w]
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Download Rust artifacts (ARMv6)
-        uses: actions/download-artifact@v4
-        with:
-          name: pwnghost-rs-arm-unknown-linux-gnueabihf
-          path: artifacts/arm-unknown-linux-gnueabihf
-
-      - name: Download Rust artifacts (ARMv7)
-        uses: actions/download-artifact@v4
-        with:
-          name: pwnghost-rs-armv7-unknown-linux-gnueabihf
-          path: artifacts/armv7-unknown-linux-gnueabihf
 
       - name: Build Docker image with Debian bookworm
         run: |

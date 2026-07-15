@@ -82,5 +82,10 @@ RUN . "$HOME/.cargo/env" && \
     cargo build --release --target arm-unknown-linux-gnueabihf --workspace && \
     cargo build --release --target armv7-unknown-linux-gnueabihf --workspace
 
+# Copy built binaries to a known location for pi-gen stages
+RUN mkdir -p /workspace/artifacts/arm-unknown-linux-gnueabihf /workspace/artifacts/armv7-unknown-linux-gnueabihf && \
+    cp /workspace/PWNGHOST-RS/target/arm-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/arm-unknown-linux-gnueabihf/ && \
+    cp /workspace/PWNGHOST-RS/target/armv7-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/armv7-unknown-linux-gnueabihf/
+
 # Build the SD card image
 CMD ["/bin/bash", "-c", "cd /workspace/pi-gen && ./build.sh"]
