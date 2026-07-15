@@ -1,5 +1,5 @@
-# PWNGHOST-RS Builder Dockerfile
-# Builds the SD card image in a container
+# Dockerfile for building PWNGHOST-RS SD card image using pi-gen
+# Based on Debian bookworm (which has armhf packages) instead of Ubuntu noble
 
 FROM debian:bookworm-slim
 
@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     fdisk \
     file \
     gawk \
+    git \
     grep \
     gzip \
     kpartx \
@@ -49,7 +50,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
     && . "$HOME/.cargo/env" \
     && rustup target add arm-unknown-linux-gnueabihf armv7-unknown-linux-gnueabihf
 
-# Add armhf architecture
+# Add armhf architecture for cross-compilation
 RUN dpkg --add-architecture armhf && apt-get update && apt-get install -y \
     gcc-arm-linux-gnueabihf \
     g++-arm-linux-gnueabihf \
