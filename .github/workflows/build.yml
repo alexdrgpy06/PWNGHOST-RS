@@ -33,7 +33,7 @@ jobs:
 
       - name: Build Docker image with Debian bookworm
         run: |
-          docker build -t pwnghost-rs-builder -f PWNGHOST-RS/Dockerfile.builder .
+          docker build -t pwnghost-rs-builder -f Dockerfile.builder .
 
       - name: Build SD card image with pi-gen
         run: |
