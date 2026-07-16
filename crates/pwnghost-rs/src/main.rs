@@ -119,9 +119,6 @@ async fn main() -> anyhow::Result<()> {
         d.init().await?;
     }
 
-    // Start AngryOxide
-    // In real implementation, this would start the subprocess
-
     // Main loop
     info!("Entering main loop");
     agent.start();
@@ -130,8 +127,22 @@ async fn main() -> anyhow::Result<()> {
         config.oxigotchi.epoch_duration as u64,
     ));
 
+    // Once the AngryOxide event channel closes for good, stop selecting on
+    // it (recv() on a closed channel resolves immediately, which would
+    // otherwise busy-loop that branch and starve the timer tick below).
+    let mut ao_events_open = true;
+
     loop {
         tokio::select! {
+            event = ao_handle.recv_event(), if ao_events_open => {
+                match event {
+                    Some(event) => agent.handle_event(&event),
+                    None => {
+                        warn!("AngryOxide event channel closed");
+                        ao_events_open = false;
+                    }
+                }
+            }
             _ = interval.tick() => {
                 // Tick agent
                 let (face, action) = agent.tick();
@@ -190,7 +201,9 @@ async fn main() -> anyhow::Result<()> {
                 match healing_action {
                     agent::HealingAction::RestartAo => {
                         warn!("Healer: Restarting AngryOxide");
-                        // Restart AO
+                        if let Err(e) = ao_handle.restart().await {
+                            error!("Failed to restart AngryOxide: {}", e);
+                        }
                     }
                     agent::HealingAction::PowerCycleGpio => {
                         error!("Healer: Power cycling WiFi chip");

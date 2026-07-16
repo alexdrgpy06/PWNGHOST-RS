@@ -15,24 +15,27 @@ use crate::args::{build_args, AngryOxideConfig};
 use crate::parser::{parse_json_line, AoEvent};
 use crate::recovery::RecoveryManager;
 
+type SharedChild = Arc<Mutex<Option<tokio::process::Child>>>;
+
 /// Handle to a running AngryOxide process
-#[allow(dead_code)]
 pub struct AngryOxideHandle {
-    child: Arc<Mutex<Option<tokio::process::Child>>>,
-    event_tx: mpsc::UnboundedSender<AoEvent>,
+    child: SharedChild,
     event_rx: Arc<Mutex<mpsc::UnboundedReceiver<AoEvent>>>,
+    event_tx: mpsc::UnboundedSender<AoEvent>,
     config: AngryOxideConfig,
     recovery: Arc<Mutex<RecoveryManager>>,
     shutdown_flag: Arc<Mutex<bool>>,
 }
 
 impl AngryOxideHandle {
-    /// Get event receiver
-    pub fn events(&self) -> mpsc::UnboundedReceiver<AoEvent> {
-        // We can't easily clone the receiver, so return a dummy
-        // In real usage, you'd store the receiver in the handle
-        let (_tx, rx) = mpsc::unbounded_channel();
-        rx
+    /// Receive the next parsed event from AngryOxide's stdout, or `None`
+    /// once the process has shut down and no more events will arrive.
+    ///
+    /// Safe to call from a single consumer loop (e.g. inside a
+    /// `tokio::select!`); the receiver is shared behind a mutex so it
+    /// survives process restarts transparently.
+    pub async fn recv_event(&self) -> Option<AoEvent> {
+        self.event_rx.lock().await.recv().await
     }
 
     /// Check if AngryOxide is running
@@ -70,18 +73,44 @@ impl AngryOxideHandle {
         Ok(())
     }
 
-    /// Restart AngryOxide
+    /// Force an immediate restart of AngryOxide, bypassing backoff.
+    ///
+    /// Unlike the automatic crash recovery (which waits out an exponential
+    /// backoff before respawning), this is for a caller that already
+    /// decided a restart is needed right now (e.g. the healing state
+    /// machine). It kills the current process if any, then spawns a
+    /// replacement and reattaches stdout/stderr readers and the crash
+    /// monitor so events keep flowing through the same `recv_event`
+    /// channel.
     pub async fn restart(&self) -> Result<()> {
         self.stop().await?;
         sleep(Duration::from_secs(1)).await;
-        // In a real implementation, you'd respawn here
-        // For now, just return Ok
+
+        *self.shutdown_flag.lock().await = false;
+        spawn_process(
+            &self.config,
+            self.child.clone(),
+            self.event_tx.clone(),
+            self.shutdown_flag.clone(),
+            self.recovery.clone(),
+        )
+        .await?;
+
+        info!("AngryOxide restarted");
         Ok(())
     }
 }
 
-/// Spawn AngryOxide subprocess with crash detection and stdout parsing
-pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHandle> {
+/// Spawn the AngryOxide child process and attach its stdout/stderr readers
+/// plus a crash monitor. Used both for the initial launch and for restarts,
+/// so every respawn keeps forwarding events into the same `event_tx`.
+async fn spawn_process(
+    config: &AngryOxideConfig,
+    child_slot: SharedChild,
+    event_tx: mpsc::UnboundedSender<AoEvent>,
+    shutdown_flag: Arc<Mutex<bool>>,
+    recovery: Arc<Mutex<RecoveryManager>>,
+) -> Result<u32> {
     let binary = &config.binary;
     if !Path::new(binary).exists() {
         return Err(anyhow::anyhow!("AngryOxide binary not found: {}", binary));
@@ -103,24 +132,13 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
     let pid = child.id().unwrap_or(0);
     info!("AngryOxide started with PID {}", pid);
 
-    // Take stdout and stderr
     let stdout = child.stdout.take().context("Failed to take stdout")?;
     let stderr = child.stderr.take().context("Failed to take stderr")?;
 
-    // Event channel
-    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    *child_slot.lock().await = Some(child);
 
-    // Recovery manager
-    let recovery = Arc::new(Mutex::new(RecoveryManager::with_defaults()));
-    let shutdown_flag = Arc::new(Mutex::new(false));
-    let child = Arc::new(Mutex::new(Some(child)));
-
-    // Spawn stdout reader
-    let event_tx_stdout = event_tx.clone();
-    let _recovery_stdout = recovery.clone();
+    // Spawn stdout reader: parses each line as an AngryOxide event.
     let shutdown_stdout = shutdown_flag.clone();
-    let _child_stdout = child.clone();
-
     tokio::spawn(async move {
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
@@ -130,10 +148,9 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
                 break;
             }
 
-            // Parse JSON line
             match parse_json_line(&line) {
                 Ok(event) => {
-                    if event_tx_stdout.send(event).is_err() {
+                    if event_tx.send(event).is_err() {
                         break; // Receiver dropped
                     }
                 }
@@ -161,11 +178,11 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
         }
     });
 
-    // Spawn crash monitor
-    let child_crash = child.clone();
+    // Spawn crash monitor: watches for process exit and records it with
+    // the recovery manager so the auto-restart loop can act on it.
+    let child_crash = child_slot.clone();
     let recovery_crash = recovery.clone();
     let shutdown_crash = shutdown_flag.clone();
-    let _pid_crash = pid;
 
     tokio::spawn(async move {
         loop {
@@ -201,12 +218,33 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
         }
     });
 
-    // Spawn auto-restart handler
+    Ok(pid)
+}
+
+/// Spawn AngryOxide subprocess with crash detection and stdout parsing
+pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHandle> {
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let recovery = Arc::new(Mutex::new(RecoveryManager::with_defaults()));
+    let shutdown_flag = Arc::new(Mutex::new(false));
+    let child: SharedChild = Arc::new(Mutex::new(None));
+
+    spawn_process(
+        config,
+        child.clone(),
+        event_tx.clone(),
+        shutdown_flag.clone(),
+        recovery.clone(),
+    )
+    .await?;
+
+    // Auto-restart handler: whenever the recovery manager's backoff clears
+    // after a crash, respawn the process (with fresh readers/monitor) so
+    // the same event channel keeps delivering data to consumers.
     let recovery_restart = recovery.clone();
     let config_restart = config.clone();
     let child_restart = child.clone();
     let shutdown_restart = shutdown_flag.clone();
-    let _event_tx_restart = event_tx.clone();
+    let event_tx_restart = event_tx.clone();
 
     tokio::spawn(async move {
         loop {
@@ -220,42 +258,30 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
                 && recovery_restart.lock().await.try_auto_restart().await
             {
                 info!("Attempting to restart AngryOxide...");
-                let args = build_args(&config_restart).unwrap();
-
-                let mut cmd = Command::new(&config_restart.binary);
-                cmd.args(&args)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .kill_on_drop(true);
-
-                match cmd.spawn() {
-                    Ok(new_child) => {
-                        let new_pid = new_child.id().unwrap_or(0);
-                        info!("AngryOxide restarted with PID {}", new_pid);
-
-                        *child_restart.lock().await = Some(new_child);
-                        // Note: In a full implementation, you'd also need to
-                        // re-setup stdout/stderr readers and event channel
-                    }
-                    Err(e) => {
-                        error!("Failed to restart AngryOxide: {}", e);
-                        recovery_restart.lock().await.record_crash();
-                    }
+                if let Err(e) = spawn_process(
+                    &config_restart,
+                    child_restart.clone(),
+                    event_tx_restart.clone(),
+                    shutdown_restart.clone(),
+                    recovery_restart.clone(),
+                )
+                .await
+                {
+                    error!("Failed to restart AngryOxide: {}", e);
+                    recovery_restart.lock().await.record_crash();
                 }
             }
         }
     });
 
-    let handle = AngryOxideHandle {
+    Ok(AngryOxideHandle {
         child,
-        event_tx,
         event_rx: Arc::new(Mutex::new(event_rx)),
+        event_tx,
         config: config.clone(),
         recovery,
         shutdown_flag,
-    };
-
-    Ok(handle)
+    })
 }
 
 #[cfg(test)]
