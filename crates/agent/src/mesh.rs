@@ -21,7 +21,6 @@ pub struct MeshPeer {
 pub struct MeshManager {
     peers: Arc<RwLock<HashMap<MacAddr, MeshPeer>>>,
     max_age: Duration,
-    #[allow(dead_code)]
     our_mac: MacAddr,
     our_name: String,
 }
@@ -95,12 +94,12 @@ impl MeshManager {
     /// Build mesh IE data for beacon/probe response
     pub fn build_mesh_ie(
         &self,
-        _epoch: u64,
-        _handshakes: u32,
+        epoch: u64,
+        handshakes: u32,
         level: u32,
-        _xp: u32,
+        xp: u32,
         mood: Mood,
-        _channel: Channel,
+        channel: Channel,
     ) -> Vec<u8> {
         // Mesh IE format:
         // Element ID: 221 (Vendor Specific)
@@ -114,7 +113,7 @@ impl MeshManager {
         // Element ID
         data.push(221);
 
-        // Length placeholder (will fill later)
+        // Length placeholder (filled in below once the payload is complete)
         let len_pos = data.len();
         data.push(0);
 
@@ -124,9 +123,8 @@ impl MeshManager {
         // Type
         data.push(0x01);
 
-        // MAC (6 bytes)
-        // In real implementation, would get from interface
-        data.extend_from_slice(&[0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]);
+        // MAC (6 bytes) - our own interface address
+        data.extend_from_slice(&self.our_mac.octets());
 
         // Name length + name
         let name_bytes = self.our_name.as_bytes();
@@ -139,7 +137,7 @@ impl MeshManager {
         }
 
         // Channel
-        data.push(1); // placeholder
+        data.push(channel.value());
 
         // Mood
         data.push(mood as u8);
@@ -148,13 +146,13 @@ impl MeshManager {
         data.extend_from_slice(&(level as u16).to_le_bytes());
 
         // XP (2 bytes LE)
-        data.extend_from_slice(&(0u16).to_le_bytes()); // placeholder
+        data.extend_from_slice(&(xp.min(u16::MAX as u32) as u16).to_le_bytes());
 
         // Epoch (8 bytes LE)
-        data.extend_from_slice(&0u64.to_le_bytes()); // placeholder
+        data.extend_from_slice(&epoch.to_le_bytes());
 
         // Handshakes (2 bytes LE)
-        data.extend_from_slice(&(0u16).to_le_bytes()); // placeholder
+        data.extend_from_slice(&(handshakes.min(u16::MAX as u32) as u16).to_le_bytes());
 
         // Fix length
         data[len_pos] = (data.len() - len_pos - 1) as u8;

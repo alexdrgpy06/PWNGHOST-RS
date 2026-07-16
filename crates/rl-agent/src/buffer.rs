@@ -32,7 +32,12 @@ impl RolloutBuffer {
         }
     }
 
-    pub fn push(&mut self, features: Features, action: RlAction, reward: f32, done: bool) {
+    /// Push a transition, returning `true` if the buffer has now reached
+    /// capacity (the caller should run `compute_advantages` + train, then
+    /// `clear`). On-policy rollouts must stay contiguous, so once full this
+    /// keeps accepting rather than silently dropping/overwriting data; it's
+    /// the caller's responsibility to drain the buffer promptly.
+    pub fn push(&mut self, features: Features, action: RlAction, reward: f32, done: bool) -> bool {
         let transition = Transition {
             features,
             action,
@@ -45,11 +50,7 @@ impl RolloutBuffer {
         };
 
         self.transitions.push(transition);
-
-        // If buffer full, could implement circular buffer or just clear
-        if self.transitions.len() >= self.capacity {
-            // For now, just keep adding (in real implementation, use circular buffer)
-        }
+        self.is_full()
     }
 
     pub fn len(&self) -> usize {
@@ -58,6 +59,15 @@ impl RolloutBuffer {
 
     pub fn is_empty(&self) -> bool {
         self.transitions.is_empty()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Whether the buffer has reached (or exceeded) its target capacity.
+    pub fn is_full(&self) -> bool {
+        self.transitions.len() >= self.capacity
     }
 
     pub fn clear(&mut self) {
@@ -109,8 +119,33 @@ mod tests {
     fn test_buffer_push() {
         let mut buffer = RolloutBuffer::new(10);
         let features = crate::features::Features::new();
-        buffer.push(features, crate::policy::RlAction::Wait, 1.0, false);
+        let full = buffer.push(features, crate::policy::RlAction::Wait, 1.0, false);
         assert_eq!(buffer.len(), 1);
+        assert!(!full);
+    }
+
+    #[test]
+    fn test_buffer_reports_full() {
+        let mut buffer = RolloutBuffer::new(2);
+        assert!(!buffer.is_full());
+
+        let full = buffer.push(
+            crate::features::Features::new(),
+            crate::policy::RlAction::Wait,
+            1.0,
+            false,
+        );
+        assert!(!full);
+        assert!(!buffer.is_full());
+
+        let full = buffer.push(
+            crate::features::Features::new(),
+            crate::policy::RlAction::Wait,
+            1.0,
+            false,
+        );
+        assert!(full);
+        assert!(buffer.is_full());
     }
 
     #[test]
