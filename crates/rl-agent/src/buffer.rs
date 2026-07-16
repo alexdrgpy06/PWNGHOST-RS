@@ -1,6 +1,5 @@
 //! Rollout buffer for RL training
 
-use anyhow::Result;
 use crate::features::Features;
 use crate::policy::RlAction;
 
@@ -13,6 +12,10 @@ pub struct Transition {
     pub value: f32,
     pub log_prob: f32,
     pub done: bool,
+    /// GAE advantage estimate (filled by `compute_advantages`).
+    pub advantage: f32,
+    /// Discounted return target (filled by `compute_advantages`).
+    pub returns: f32,
 }
 
 /// Rollout buffer for PPO/A2C
@@ -37,6 +40,8 @@ impl RolloutBuffer {
             value: 0.0, // Will be filled during GAE computation
             log_prob: 0.0,
             done,
+            advantage: 0.0,
+            returns: 0.0,
         };
 
         self.transitions.push(transition);
@@ -64,23 +69,21 @@ impl RolloutBuffer {
         &self.transitions
     }
 
-    /// Compute advantages using GAE
+    /// Compute advantages and return targets using Generalized Advantage
+    /// Estimation (GAE), storing the results on each transition.
     pub fn compute_advantages(&mut self, gamma: f32, gae_lambda: f32, last_value: f32) {
-        let mut advantages = Vec::with_capacity(self.transitions.len());
+        let mut next_value = last_value;
         let mut next_advantage = 0.0f32;
 
-        for transition in self.transitions.iter().rev() {
-            let delta = transition.reward + gamma * last_value * (1.0 - transition.done as u8 as f32) - transition.value;
-            next_advantage = delta + gamma * gae_lambda * (1.0 - transition.done as u8 as f32) * next_advantage;
-            advantages.push(next_advantage);
-            last_value = transition.value;
-        }
+        for transition in self.transitions.iter_mut().rev() {
+            let non_terminal = 1.0 - transition.done as u8 as f32;
+            let delta = transition.reward + gamma * next_value * non_terminal - transition.value;
+            next_advantage = delta + gamma * gae_lambda * non_terminal * next_advantage;
 
-        advantages.reverse();
+            transition.advantage = next_advantage;
+            transition.returns = next_advantage + transition.value;
 
-        for (i, transition) in self.transitions.iter_mut().enumerate() {
-            // In real implementation, store advantage and return
-            // For now, just compute
+            next_value = transition.value;
         }
     }
 }

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 use tokio::process::Command;
-use tracing::{debug, info};
+use tracing::info;
 
 /// Detected BCM chip type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,8 +67,7 @@ async fn detect_from_dt() -> Result<String> {
     ];
 
     for pattern in compatible_paths {
-        let paths = glob::glob(pattern)
-            .context("Failed to glob device tree compatibles")?;
+        let paths = glob::glob(pattern).context("Failed to glob device tree compatibles")?;
 
         for path in paths.flatten() {
             if let Ok(content) = fs::read_to_string(path) {
@@ -176,10 +175,7 @@ pub async fn get_chip_info() -> Result<ChipInfo> {
     };
 
     // Try to get revision from dmesg
-    let output = Command::new("dmesg")
-        .args(["-T", "-k"])
-        .output()
-        .await?;
+    let output = Command::new("dmesg").args(["-T", "-k"]).output().await?;
     let output = String::from_utf8_lossy(&output.stdout);
 
     let mut revision = "unknown".to_string();
@@ -187,7 +183,11 @@ pub async fn get_chip_info() -> Result<ChipInfo> {
         if line.contains("brcmfmac") && line.contains("rev") {
             if let Some(pos) = line.find("rev ") {
                 let after = &line[pos + 4..];
-                revision = after.split([' ', ',']).next().unwrap_or("unknown").to_string();
+                revision = after
+                    .split([' ', ','])
+                    .next()
+                    .unwrap_or("unknown")
+                    .to_string();
                 break;
             }
         }
@@ -207,7 +207,8 @@ mod tests {
 
     #[test]
     fn test_extract_chip_from_line() {
-        let line = "brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43436-sdio for chip BCM43436/1";
+        let line =
+            "brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43436-sdio for chip BCM43436/1";
         let chip = extract_chip_from_line(line);
         assert_eq!(chip, Some("BCM43436".to_string()));
 

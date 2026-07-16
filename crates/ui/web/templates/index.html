@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PWNGHOST-RS</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      margin: 0; padding: 2rem; background: #0b0f0c; color: #b7f7c2;
+    }
+    h1 { font-size: 1.4rem; letter-spacing: 0.1em; }
+    .face { font-size: 2.5rem; margin: 1rem 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; max-width: 720px; }
+    .card { border: 1px solid #1f3a29; border-radius: 8px; padding: 0.75rem 1rem; background: #0f1712; }
+    .k { opacity: 0.6; font-size: 0.75rem; text-transform: uppercase; }
+    .v { font-size: 1.25rem; }
+    footer { margin-top: 2rem; opacity: 0.5; font-size: 0.75rem; }
+  </style>
+</head>
+<body>
+  <h1>PWNGHOST-RS</h1>
+  <div class="face" id="face">(◕‿‿◕)</div>
+  <div class="grid">
+    <div class="card"><div class="k">Mood</div><div class="v" id="mood">—</div></div>
+    <div class="card"><div class="k">Channel</div><div class="v" id="channel">—</div></div>
+    <div class="card"><div class="k">APs</div><div class="v" id="aps">—</div></div>
+    <div class="card"><div class="k">Handshakes</div><div class="v" id="handshakes">—</div></div>
+    <div class="card"><div class="k">Level</div><div class="v" id="level">—</div></div>
+    <div class="card"><div class="k">Peers</div><div class="v" id="peers">—</div></div>
+    <div class="card"><div class="k">Uptime</div><div class="v" id="uptime">—</div></div>
+    <div class="card"><div class="k">Epoch</div><div class="v" id="epoch">—</div></div>
+  </div>
+  <footer>Live status refreshes every few seconds.</footer>
+  <script>
+    async function refresh() {
+      try {
+        const r = await fetch('/api/status');
+        if (!r.ok) return;
+        const s = await r.json();
+        const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+        set('face', s.face); set('mood', s.mood); set('channel', s.channel);
+        set('aps', s.aps); set('handshakes', s.handshakes); set('level', s.level);
+        set('peers', s.peers); set('uptime', s.uptime + 's'); set('epoch', s.epoch);
+      } catch (e) { /* server not ready */ }
+    }
+    refresh();
+    setInterval(refresh, 3000);
+  </script>
+</body>
+</html>

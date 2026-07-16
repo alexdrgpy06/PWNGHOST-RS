@@ -1,10 +1,10 @@
 //! GPIO control for WL_REG_ON power cycling (BCM43436B0)
+//!
+//! The real implementation uses `rppal` and is only compiled when the
+//! `linux-gpio` feature is enabled (i.e. on the Raspberry Pi target). On
+//! other build targets a stub is provided so the workspace still compiles.
 
-use anyhow::{Context, Result};
-use rppal::gpio::{Gpio, Level, OutputPin};
-use std::time::Duration;
-use tokio::time::sleep;
-use tracing::{info, warn};
+use anyhow::Result;
 
 /// GPIO pin for WL_REG_ON on Pi Zero 2W (GPIO 22, same as Pi 3B+)
 pub const WL_REG_ON_PIN: u8 = 22;
@@ -17,79 +17,111 @@ pub async fn power_cycle_wl_reg_on() -> Result<()> {
     power_cycle_wl_reg_on_with_params(WL_REG_ON_PIN, DEFAULT_PULSE_MS).await
 }
 
-/// Power cycle with custom pin and duration
-pub async fn power_cycle_wl_reg_on_with_params(pin: u8, pulse_ms: u64) -> Result<()> {
-    info!("Power cycling WL_REG_ON on GPIO {} for {}ms", pin, pulse_ms);
+#[cfg(feature = "linux-gpio")]
+mod imp {
+    use super::*;
+    use anyhow::Context;
+    use rppal::gpio::{Gpio, OutputPin};
+    use std::time::Duration;
+    use tokio::time::sleep;
+    use tracing::info;
 
-    let gpio = Gpio::new()
-        .context("Failed to initialize GPIO")?;
+    /// Power cycle with custom pin and duration
+    pub async fn power_cycle_wl_reg_on_with_params(pin: u8, pulse_ms: u64) -> Result<()> {
+        info!("Power cycling WL_REG_ON on GPIO {} for {}ms", pin, pulse_ms);
 
-    let mut wl_reg_on = gpio.get(pin)
-        .with_context(|| format!("Failed to get GPIO {}", pin))?
-        .into_output_low();
+        let gpio = Gpio::new().context("Failed to initialize GPIO")?;
 
-    // Ensure it's low first
-    wl_reg_on.set_low();
-    sleep(Duration::from_millis(10)).await;
+        let mut wl_reg_on = gpio
+            .get(pin)
+            .with_context(|| format!("Failed to get GPIO {}", pin))?
+            .into_output_low();
 
-    // Pulse high
-    wl_reg_on.set_high();
-    sleep(Duration::from_millis(pulse_ms)).await;
+        // Ensure it's low first
+        wl_reg_on.set_low();
+        sleep(Duration::from_millis(10)).await;
 
-    // Pulse low
-    wl_reg_on.set_low();
-    sleep(Duration::from_millis(10)).await;
+        // Pulse high
+        wl_reg_on.set_high();
+        sleep(Duration::from_millis(pulse_ms)).await;
 
-    info!("WL_REG_ON power cycle complete");
-    Ok(())
+        // Pulse low
+        wl_reg_on.set_low();
+        sleep(Duration::from_millis(10)).await;
+
+        info!("WL_REG_ON power cycle complete");
+        Ok(())
+    }
+
+    /// Set WL_REG_ON high (enable chip)
+    pub async fn set_wl_reg_on_high(pin: u8) -> Result<OutputPin> {
+        let gpio = Gpio::new().context("Failed to initialize GPIO")?;
+
+        let mut wl_reg_on = gpio
+            .get(pin)
+            .with_context(|| format!("Failed to get GPIO {}", pin))?
+            .into_output_low();
+
+        wl_reg_on.set_high();
+        info!("WL_REG_ON set HIGH on GPIO {}", pin);
+        Ok(wl_reg_on)
+    }
+
+    /// Set WL_REG_ON low (disable chip)
+    pub async fn set_wl_reg_on_low(pin: u8) -> Result<OutputPin> {
+        let gpio = Gpio::new().context("Failed to initialize GPIO")?;
+
+        let mut wl_reg_on = gpio
+            .get(pin)
+            .with_context(|| format!("Failed to get GPIO {}", pin))?
+            .into_output_low();
+
+        wl_reg_on.set_low();
+        info!("WL_REG_ON set LOW on GPIO {}", pin);
+        Ok(wl_reg_on)
+    }
+
+    /// Full power cycle sequence with chip enable/disable
+    pub async fn full_power_cycle(pin: u8, pulse_ms: u64) -> Result<()> {
+        info!("Starting full power cycle sequence on GPIO {}", pin);
+
+        // 1. Disable chip
+        let _pin_low = set_wl_reg_on_low(pin).await?;
+        sleep(Duration::from_millis(100)).await;
+
+        // 2. Pulse high to reset
+        let _pin_high = set_wl_reg_on_high(pin).await?;
+        sleep(Duration::from_millis(pulse_ms)).await;
+
+        // 3. Keep high for normal operation (pin stays high after this)
+
+        info!("Full power cycle sequence complete");
+        Ok(())
+    }
 }
 
-/// Set WL_REG_ON high (enable chip)
-pub async fn set_wl_reg_on_high(pin: u8) -> Result<OutputPin> {
-    let gpio = Gpio::new()
-        .context("Failed to initialize GPIO")?;
+#[cfg(not(feature = "linux-gpio"))]
+mod imp {
+    use super::*;
+    use tracing::warn;
 
-    let mut wl_reg_on = gpio.get(pin)
-        .with_context(|| format!("Failed to get GPIO {}", pin))?
-        .into_output_low();
+    fn unavailable(what: &str) -> Result<()> {
+        warn!("{what}: GPIO not available on this build (rebuild with --features linux-gpio)");
+        anyhow::bail!("GPIO support not compiled in (enable the `linux-gpio` feature)")
+    }
 
-    wl_reg_on.set_high();
-    info!("WL_REG_ON set HIGH on GPIO {}", pin);
-    Ok(wl_reg_on)
+    /// Power cycle with custom pin and duration (stub without `linux-gpio`)
+    pub async fn power_cycle_wl_reg_on_with_params(pin: u8, _pulse_ms: u64) -> Result<()> {
+        unavailable(&format!("power_cycle_wl_reg_on GPIO {pin}"))
+    }
+
+    /// Full power cycle sequence (stub without `linux-gpio`)
+    pub async fn full_power_cycle(pin: u8, _pulse_ms: u64) -> Result<()> {
+        unavailable(&format!("full_power_cycle GPIO {pin}"))
+    }
 }
 
-/// Set WL_REG_ON low (disable chip)
-pub async fn set_wl_reg_on_low(pin: u8) -> Result<OutputPin> {
-    let gpio = Gpio::new()
-        .context("Failed to initialize GPIO")?;
-
-    let mut wl_reg_on = gpio.get(pin)
-        .with_context(|| format!("Failed to get GPIO {}", pin))?
-        .into_output_low();
-
-    wl_reg_on.set_low();
-    info!("WL_REG_ON set LOW on GPIO {}", pin);
-    Ok(wl_reg_on)
-}
-
-/// Full power cycle sequence with chip enable/disable
-pub async fn full_power_cycle(pin: u8, pulse_ms: u64) -> Result<()> {
-    info!("Starting full power cycle sequence on GPIO {}", pin);
-
-    // 1. Disable chip
-    let _pin_low = set_wl_reg_on_low(pin).await?;
-    sleep(Duration::from_millis(100)).await;
-
-    // 2. Pulse high to reset
-    let _pin_high = set_wl_reg_on_high(pin).await?;
-    sleep(Duration::from_millis(pulse_ms)).await;
-
-    // 3. Keep high for normal operation
-    // (Pin stays high after this)
-
-    info!("Full power cycle sequence complete");
-    Ok(())
-}
+pub use imp::*;
 
 #[cfg(test)]
 mod tests {

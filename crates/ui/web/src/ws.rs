@@ -1,26 +1,62 @@
 //! WebSocket manager for live updates
 
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::Response,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use serde::Serialize;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
-use tracing::{debug, info};
+use tokio::sync::broadcast;
+use tracing::debug;
 
 /// Live update message types
 #[derive(Serialize, Clone)]
 #[serde(tag = "type")]
 pub enum LiveUpdate {
-    Session { epoch: u64, uptime: u64, aps: usize, handshakes: u32, channel: u8, mood: String, face: String, level: u32, xp: u32, peers: usize },
-    Handshake { id: String, bssid: String, ssid: Option<String>, channel: u8, handshake_type: String },
-    Peer { mac: String, name: String, channel: u8, mood: String, level: u32 },
-    PeerLost { mac: String },
-    ChannelChange { channel: u8 },
-    MoodChange { mood: String, face: String },
-    Status { cpu_temp: Option<f32>, ram_used: u64, ram_total: u64, battery: Option<u8>, charging: bool },
+    Session {
+        epoch: u64,
+        uptime: u64,
+        aps: usize,
+        handshakes: u32,
+        channel: u8,
+        mood: String,
+        face: String,
+        level: u32,
+        xp: u32,
+        peers: usize,
+    },
+    Handshake {
+        id: String,
+        bssid: String,
+        ssid: Option<String>,
+        channel: u8,
+        handshake_type: String,
+    },
+    Peer {
+        mac: String,
+        name: String,
+        channel: u8,
+        mood: String,
+        level: u32,
+    },
+    PeerLost {
+        mac: String,
+    },
+    ChannelChange {
+        channel: u8,
+    },
+    MoodChange {
+        mood: String,
+        face: String,
+    },
+    Status {
+        cpu_temp: Option<f32>,
+        ram_used: u64,
+        ram_total: u64,
+        battery: Option<u8>,
+        charging: bool,
+    },
 }
 
 /// WebSocket manager for broadcasting updates
@@ -44,46 +80,32 @@ impl WebSocketManager {
         self.sender.subscribe()
     }
 
-    /// Handle WebSocket upgrade
-    pub async fn handle_upgrade(
-        ws: WebSocketUpgrade,
-        State(manager): State<Arc<Self>>,
-    ) -> Response {
-        ws.on_upgrade(move |socket| handle_socket(socket, manager))
-    }
-}
-
-impl Default for WebSocketManager {
-    fn default() -> Self {
-        Self::new()
+    /// Handle a WebSocket upgrade for this manager.
+    pub fn handle_upgrade(self: Arc<Self>, ws: WebSocketUpgrade) -> Response {
+        ws.on_upgrade(move |socket| handle_socket(socket, self))
     }
 }
 
 /// Handle individual WebSocket connection
 async fn handle_socket(socket: WebSocket, manager: Arc<WebSocketManager>) {
-    let mut receiver = manager.subscribe();
+    let mut broadcast_rx = manager.subscribe();
     let (mut sender, mut receiver_ws) = socket.split();
 
     // Spawn task to forward broadcasts to WebSocket
-    let mut broadcast_rx = receiver;
-    let mut send_task = tokio::spawn(async move {
+    let send_task = tokio::spawn(async move {
         while let Ok(update) = broadcast_rx.recv().await {
             if let Ok(msg) = serde_json::to_string(&update) {
-                if sender.send(Message::Text(msg.into())).await.is_err() {
+                if sender.send(Message::Text(msg)).await.is_err() {
                     break;
                 }
             }
         }
     });
 
-    // Handle incoming messages (ping/pong, etc.)
+    // Drain incoming messages until the client closes (axum auto-answers pings).
     while let Some(msg) = receiver_ws.next().await {
-        match msg {
-            Ok(Message::Close(_)) => break,
-            Ok(Message::Ping(data)) => {
-                let _ = sender.send(Message::Pong(data)).await;
-            }
-            _ => {}
+        if matches!(msg, Ok(Message::Close(_)) | Err(_)) {
+            break;
         }
     }
 
@@ -93,16 +115,59 @@ async fn handle_socket(socket: WebSocket, manager: Arc<WebSocketManager>) {
 
 /// Helper functions for broadcasting updates
 impl WebSocketManager {
-    pub fn broadcast_session(&self, epoch: u64, uptime: u64, aps: usize, handshakes: u32, channel: u8, mood: String, face: String, level: u32, xp: u32, peers: usize) {
-        self.broadcast(LiveUpdate::Session { epoch, uptime, aps, handshakes, channel, mood, face, level, xp, peers });
+    #[allow(clippy::too_many_arguments)]
+    pub fn broadcast_session(
+        &self,
+        epoch: u64,
+        uptime: u64,
+        aps: usize,
+        handshakes: u32,
+        channel: u8,
+        mood: String,
+        face: String,
+        level: u32,
+        xp: u32,
+        peers: usize,
+    ) {
+        self.broadcast(LiveUpdate::Session {
+            epoch,
+            uptime,
+            aps,
+            handshakes,
+            channel,
+            mood,
+            face,
+            level,
+            xp,
+            peers,
+        });
     }
 
-    pub fn broadcast_handshake(&self, id: String, bssid: String, ssid: Option<String>, channel: u8, handshake_type: String) {
-        self.broadcast(LiveUpdate::Handshake { id, bssid, ssid, channel, handshake_type });
+    pub fn broadcast_handshake(
+        &self,
+        id: String,
+        bssid: String,
+        ssid: Option<String>,
+        channel: u8,
+        handshake_type: String,
+    ) {
+        self.broadcast(LiveUpdate::Handshake {
+            id,
+            bssid,
+            ssid,
+            channel,
+            handshake_type,
+        });
     }
 
     pub fn broadcast_peer(&self, mac: String, name: String, channel: u8, mood: String, level: u32) {
-        self.broadcast(LiveUpdate::Peer { mac, name, channel, mood, level });
+        self.broadcast(LiveUpdate::Peer {
+            mac,
+            name,
+            channel,
+            mood,
+            level,
+        });
     }
 
     pub fn broadcast_peer_lost(&self, mac: String) {
@@ -117,8 +182,21 @@ impl WebSocketManager {
         self.broadcast(LiveUpdate::MoodChange { mood, face });
     }
 
-    pub fn broadcast_status(&self, cpu_temp: Option<f32>, ram_used: u64, ram_total: u64, battery: Option<u8>, charging: bool) {
-        self.broadcast(LiveUpdate::Status { cpu_temp, ram_used, ram_total, battery, charging });
+    pub fn broadcast_status(
+        &self,
+        cpu_temp: Option<f32>,
+        ram_used: u64,
+        ram_total: u64,
+        battery: Option<u8>,
+        charging: bool,
+    ) {
+        self.broadcast(LiveUpdate::Status {
+            cpu_temp,
+            ram_used,
+            ram_total,
+            battery,
+            charging,
+        });
     }
 }
 

@@ -82,12 +82,13 @@ async fn pair_device(mac: &str) -> Result<()> {
 /// Connect PAN via D-Bus directly
 async fn connect_pan_dbus(mac: &str) -> Result<()> {
     // Use D-Bus to connect PAN profile
+    let dev_path = format!("/org/bluez/hci0/dev_{}", mac.replace(':', "_"));
     let status = Command::new("dbus-send")
         .args([
             "--system",
             "--dest=org.bluez",
             "--type=method_call",
-            "/org/bluez/hci0/dev_XX_XX_XX_XX_XX_XX".replace("XX_XX_XX_XX_XX_XX", &mac.replace(':', "_")),
+            dev_path.as_str(),
             "org.bluez.Network1.Connect",
             "string:nap",
         ])
@@ -103,10 +104,7 @@ async fn connect_pan_dbus(mac: &str) -> Result<()> {
 /// Request DHCP on PAN interface
 async fn request_dhcp(iface: &str) -> Result<()> {
     // Try dhclient
-    let status = Command::new("dhclient")
-        .args([iface])
-        .status()
-        .await;
+    let status = Command::new("dhclient").args([iface]).status().await;
 
     if let Ok(s) = status {
         if s.success() {
@@ -169,7 +167,6 @@ pub struct BluetoothDevice {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_bluetooth_module() {

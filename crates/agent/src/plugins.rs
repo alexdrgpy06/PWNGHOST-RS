@@ -1,14 +1,12 @@
 //! Lua plugin system
 
+use crate::epoch::EpochState;
 use anyhow::Result;
-use mlua::{Lua, Table, Value};
-use pwncore::EpochState;
-use serde_json;
+use mlua::Lua;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Plugin API exposed to Lua
 pub struct PluginApi {
@@ -37,20 +35,16 @@ pub struct PeerInfo {
 pub struct LuaPlugin {
     name: String,
     lua: Lua,
-    code: String,
 }
 
 impl LuaPlugin {
     pub fn new(name: &str, code: &str) -> Result<Self> {
         let lua = Lua::new();
-        // Register API
-        let api = lua.create_table()?;
-        // Would register API functions here
-        
+        // Load the plugin source so its hook functions become globals.
+        lua.load(code).exec()?;
         Ok(Self {
             name: name.to_string(),
             lua,
-            code: code.to_string(),
         })
     }
 
@@ -58,9 +52,19 @@ impl LuaPlugin {
         &self.name
     }
 
-    pub fn execute(&self, func: &str, args: &[Value]) -> Result<()> {
-        let func = self.lua.globals().get::<_, mlua::Function>(func)?;
-        func.call(args)?;
+    /// Expose per-epoch context to the plugin via Lua globals.
+    pub fn set_context(&self, epoch: u64, status: &EpochState) -> Result<()> {
+        let globals = self.lua.globals();
+        globals.set("epoch", epoch)?;
+        globals.set("status_json", serde_json::to_string(status)?)?;
+        Ok(())
+    }
+
+    /// Call a global Lua function by name if it exists.
+    pub fn execute(&self, func: &str) -> Result<()> {
+        if let Ok(f) = self.lua.globals().get::<mlua::Function>(func) {
+            f.call::<()>(())?;
+        }
         Ok(())
     }
 }
@@ -72,7 +76,16 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
-    pub async fn new(config: &crate::config::PwnConfig) -> Result<Self> {
+    /// Create an empty plugin manager (no plugins loaded yet).
+    pub fn new() -> Self {
+        Self {
+            plugins: HashMap::new(),
+            plugin_dir: std::path::PathBuf::new(),
+        }
+    }
+
+    /// Create a plugin manager and load plugins described by `config`.
+    pub async fn load(config: &config::PwnConfig) -> Result<Self> {
         let mut mgr = Self {
             plugins: HashMap::new(),
             plugin_dir: std::path::PathBuf::from(&config.main.custom_plugins),
@@ -83,35 +96,34 @@ impl PluginManager {
     }
 
     async fn load_plugins(&mut self) -> Result<()> {
-        if !self.plugin_dir.exists() {
-            return Ok(());
-        }
+        // Load user plugins from disk if the directory exists.
+        if self.plugin_dir.exists() {
+            let mut entries = tokio::fs::read_dir(&self.plugin_dir).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                if entry.path().extension().is_some_and(|e| e == "lua") {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let code = tokio::fs::read_to_string(entry.path()).await?;
 
-        let mut entries = tokio::fs::read_dir(&self.plugin_dir).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            if entry.path().extension().map_or(false, |e| e == "lua") {
-                let name = entry.file_name().to_string_lossy().to_string();
-                let code = tokio::fs::read_to_string(entry.path()).await?;
-                
-                match LuaPlugin::new(&name, &code) {
-                    Ok(plugin) => {
-                        self.plugins.insert(name.clone(), plugin);
-                        info!("Loaded plugin: {}", name);
-                    }
-                    Err(e) => {
-                        warn!("Failed to load plugin {}: {}", name, e);
+                    match LuaPlugin::new(&name, &code) {
+                        Ok(plugin) => {
+                            self.plugins.insert(name.clone(), plugin);
+                            info!("Loaded plugin: {}", name);
+                        }
+                        Err(e) => {
+                            warn!("Failed to load plugin {}: {}", name, e);
+                        }
                     }
                 }
             }
         }
 
-        // Load built-in plugins
-        self.load_builtin_plugins()?;
+        // Load built-in plugins.
+        self.load_builtin_plugins();
         Ok(())
     }
 
-    fn load_builtin_plugins(&mut self) -> Result<()> {
-        // Built-in plugins as strings
+    fn load_builtin_plugins(&mut self) {
+        // Built-in plugin sources, embedded at compile time.
         let builtins = [
             ("auto_tune", include_str!("../../lua/auto_tune.lua")),
             ("auto_backup", include_str!("../../lua/auto_backup.lua")),
@@ -135,22 +147,26 @@ impl PluginManager {
         ];
 
         for (name, code) in builtins {
-            if let Ok(plugin) = LuaPlugin::new(name, code) {
-                self.plugins.insert(name.to_string(), plugin);
+            match LuaPlugin::new(name, code) {
+                Ok(plugin) => {
+                    self.plugins.entry(name.to_string()).or_insert(plugin);
+                }
+                Err(e) => warn!("Failed to load builtin plugin {}: {}", name, e),
             }
         }
-
-        Ok(())
     }
 
     pub fn get_plugin(&self, name: &str) -> Option<&LuaPlugin> {
         self.plugins.get(name)
     }
 
-    pub async fn on_epoch(&self, epoch: u64, status: &crate::EpochStatus) -> Result<()> {
-        // Call on_epoch for all plugins
+    /// Invoke the `on_epoch` hook of every loaded plugin.
+    pub async fn on_epoch(&self, epoch: u64, status: &EpochState) -> Result<()> {
         for (name, plugin) in &self.plugins {
-            if let Err(e) = plugin.execute("on_epoch", &[serde_json::to_value(epoch)?, serde_json::to_value(status)?]) {
+            if let Err(e) = plugin
+                .set_context(epoch, status)
+                .and_then(|_| plugin.execute("on_epoch"))
+            {
                 warn!("Plugin {} on_epoch error: {}", name, e);
             }
         }
@@ -162,14 +178,20 @@ impl PluginManager {
     }
 }
 
+impl Default for PluginManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
     async fn test_plugin_manager() {
-        let config = crate::config::PwnConfig::default();
-        let mgr = PluginManager::new(&config).await.unwrap();
-        assert!(mgr.list_plugins().len() > 0);
+        let config = config::PwnConfig::default();
+        let mgr = PluginManager::load(&config).await.unwrap();
+        assert!(!mgr.list_plugins().is_empty());
     }
 }

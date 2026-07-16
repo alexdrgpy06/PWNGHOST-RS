@@ -28,15 +28,20 @@ pub struct PatchInfo {
     pub sha256: String,
     pub size: u64,
     pub layers: u8,
+    /// Expected SHA256 of the firmware *after* patches are applied.
+    /// Optional: when empty, post-patch verification is skipped.
+    #[serde(default)]
+    pub output_sha256: String,
 }
 
 impl Manifest {
     /// Load manifest from JSON file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path = path.as_ref();
         let content = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read manifest: {}", path.as_ref().display()))?;
-        let manifest: Manifest = serde_json::from_str(&content)
-            .with_context(|| "Failed to parse manifest JSON")?;
+            .with_context(|| format!("Failed to read manifest: {}", path.display()))?;
+        let manifest: Manifest =
+            serde_json::from_str(&content).with_context(|| "Failed to parse manifest JSON")?;
         Ok(manifest)
     }
 
@@ -129,8 +134,8 @@ pub fn bytes_sha256(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_bytes_sha256() {

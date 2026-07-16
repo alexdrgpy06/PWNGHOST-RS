@@ -8,7 +8,10 @@ description = "Configuration loading for PWNGHOST-RS"
 anyhow = { workspace = true }
 figment = { version = "0.10", features = ["toml", "env", "json"] }
 serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
 tokio = { workspace = true }
+chrono = { workspace = true }
 pwncore = { path = "../pwncore" }
 
 [dev-dependencies]

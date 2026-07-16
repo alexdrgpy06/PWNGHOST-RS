@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// Legacy config structure for migration
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyConfig {
     pub main: Option<LegacyMainConfig>,
     pub personality: Option<LegacyPersonalityConfig>,
@@ -15,7 +15,7 @@ pub struct LegacyConfig {
     pub plugins: Option<HashMap<String, LegacyPluginConfig>>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyMainConfig {
     pub name: Option<String>,
     pub lang: Option<String>,
@@ -32,9 +32,18 @@ pub struct LegacyMainConfig {
     pub log: Option<LegacyLogConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyPersonalityConfig {
     pub advertise: Option<bool>,
+    pub look_r: Option<Vec<String>>,
+    pub look_l: Option<Vec<String>>,
+    pub look_r_happy: Option<Vec<String>>,
+    pub look_l_happy: Option<Vec<String>>,
+    pub sleep: Option<Vec<String>>,
+    pub awake: Option<Vec<String>>,
+    pub bored: Option<Vec<String>>,
+    pub intense: Option<Vec<String>>,
+    pub cool: Option<Vec<String>>,
     pub happy: Option<Vec<String>>,
     pub excited: Option<Vec<String>>,
     pub grateful: Option<Vec<String>>,
@@ -57,14 +66,14 @@ pub struct LegacyPersonalityConfig {
     pub associate: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyUiConfig {
     pub web: Option<LegacyWebConfig>,
     pub display: Option<LegacyDisplayConfig>,
     pub faces: Option<LegacyFacesConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyWebConfig {
     pub enabled: Option<bool>,
     pub address: Option<String>,
@@ -77,47 +86,47 @@ pub struct LegacyWebConfig {
     pub theme: Option<LegacyWebThemeConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyWebThemeConfig {
     pub accent_r: Option<u8>,
     pub accent_g: Option<u8>,
     pub accent_b: Option<u8>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyDisplayConfig {
     pub enabled: Option<bool>,
     pub rotation: Option<u16>,
     pub display_type: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyFacesConfig {
     pub png: Option<bool>,
     pub position_x: Option<i32>,
     pub position_y: Option<i32>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyBettercapConfig {
     pub handshakes: Option<String>,
     pub silence: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyLogConfig {
     pub path: Option<String>,
     pub path_debug: Option<String>,
     pub rotation: Option<LegacyLogRotationConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyLogRotationConfig {
     pub enabled: Option<bool>,
     pub size: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct LegacyPluginConfig {
     pub enabled: Option<bool>,
     #[serde(flatten)]
@@ -133,18 +142,30 @@ pub fn migrate_config(legacy: LegacyConfig) -> super::schema::PwnConfig {
         config.main.name = m.name.unwrap_or_else(|| "pwnghost".to_string());
         config.main.lang = m.lang.unwrap_or_else(|| "en".to_string());
         config.main.iface = m.iface.unwrap_or_else(|| "wlan0".to_string());
-        config.main.mon_start_cmd = m.mon_start_cmd.unwrap_or_else(|| "/usr/bin/monstart".to_string());
-        config.main.mon_stop_cmd = m.mon_stop_cmd.unwrap_or_else(|| "/usr/bin/monstop".to_string());
+        config.main.mon_start_cmd = m
+            .mon_start_cmd
+            .unwrap_or_else(|| "/usr/bin/monstart".to_string());
+        config.main.mon_stop_cmd = m
+            .mon_stop_cmd
+            .unwrap_or_else(|| "/usr/bin/monstop".to_string());
         config.main.mon_max_blind_epochs = m.mon_max_blind_epochs.unwrap_or(5);
         config.main.no_restart = m.no_restart.unwrap_or(false);
         config.main.whitelist = m.whitelist.unwrap_or_default();
-        config.main.confd = m.confd.unwrap_or_else(|| "/etc/pwnghost/conf.d/".to_string());
+        config.main.confd = m
+            .confd
+            .unwrap_or_else(|| "/etc/pwnghost/conf.d/".to_string());
         config.main.custom_plugin_repos = m.custom_plugin_repos.unwrap_or_default();
-        config.main.custom_plugins = m.custom_plugins.unwrap_or_else(|| "/usr/local/share/pwnghost/custom-plugins/".to_string());
+        config.main.custom_plugins = m
+            .custom_plugins
+            .unwrap_or_else(|| "/usr/local/share/pwnghost/custom-plugins/".to_string());
 
         if let Some(log) = m.log {
-            config.main.log.path = log.path.unwrap_or_else(|| "/etc/pwnghost/log/pwnghost.log".to_string());
-            config.main.log.path_debug = log.path_debug.unwrap_or_else(|| "/etc/pwnghost/log/pwnghost-debug.log".to_string());
+            config.main.log.path = log
+                .path
+                .unwrap_or_else(|| "/etc/pwnghost/log/pwnghost.log".to_string());
+            config.main.log.path_debug = log
+                .path_debug
+                .unwrap_or_else(|| "/etc/pwnghost/log/pwnghost-debug.log".to_string());
             if let Some(rot) = log.rotation {
                 config.main.log.rotation.enabled = rot.enabled.unwrap_or(true);
                 config.main.log.rotation.size = rot.size.unwrap_or_else(|| "10M".to_string());
@@ -178,28 +199,86 @@ pub fn migrate_config(legacy: LegacyConfig) -> super::schema::PwnConfig {
         config.personality.frame_padding_min_bytes = p.frame_padding_min_bytes.unwrap_or(650);
 
         // Migrate faces
+        let defaults = super::schema::FaceConfig::default();
         config.personality.faces = super::schema::FaceConfig {
-            look_r: p.happy.unwrap_or_else(|| vec!["(•‿‿•)".to_string(), "(^‿‿^)".to_string(), "(^◡◡^)".to_string()]),
-            look_l: p.happy.unwrap_or_else(|| vec!["(•‿‿•)".to_string(), "(^‿‿^)".to_string(), "(^◡◡^)".to_string()]),
-            look_r_happy: p.excited.unwrap_or_else(|| vec!["(ᵔ◡◡ᵔ)".to_string(), "(✜‿‿✜)".to_string()]),
-            look_l_happy: p.excited.unwrap_or_else(|| vec!["(ᵔ◡◡ᵔ)".to_string(), "(✜‿‿✜)".to_string()]),
-            sleep: p.broken.unwrap_or_else(|| vec!["(⇀‿‿↼)".to_string(), "(≖‿‿≖)".to_string(), "(－_－)".to_string()]),
-            awake: p.friend.unwrap_or_else(|| vec!["(◕‿‿◕)".to_string()]),
-            bored: p.bored.unwrap_or_else(|| vec!["(-__-)".to_string(), "(—__—)".to_string()]),
-            intense: p.intense.unwrap_or_else(|| vec!["(°▃▃°)".to_string(), "(°ロ°)".to_string()]),
-            cool: p.cool.unwrap_or_else(|| vec!["(⌐■_■)".to_string(), "(단__단)".to_string()]),
-            happy: p.happy.unwrap_or_else(|| vec!["(•‿‿•)".to_string(), "(^‿‿^)".to_string(), "(^◡◡^)".to_string()]),
-            excited: p.excited.unwrap_or_else(|| vec!["(ᵔ◡◡ᵔ)".to_string(), "(✜‿‿✜)".to_string()]),
+            look_r: p.look_r.unwrap_or(defaults.look_r),
+            look_l: p.look_l.unwrap_or(defaults.look_l),
+            look_r_happy: p.look_r_happy.unwrap_or(defaults.look_r_happy),
+            look_l_happy: p.look_l_happy.unwrap_or(defaults.look_l_happy),
+            sleep: p.sleep.unwrap_or(defaults.sleep),
+            awake: p.awake.unwrap_or(defaults.awake),
+            bored: p
+                .bored
+                .unwrap_or_else(|| vec!["(-__-)".to_string(), "(—__—)".to_string()]),
+            intense: p
+                .intense
+                .unwrap_or_else(|| vec!["(°▃▃°)".to_string(), "(°ロ°)".to_string()]),
+            cool: p
+                .cool
+                .unwrap_or_else(|| vec!["(⌐■_■)".to_string(), "(단__단)".to_string()]),
+            happy: p.happy.unwrap_or_else(|| {
+                vec![
+                    "(•‿‿•)".to_string(),
+                    "(^‿‿^)".to_string(),
+                    "(^◡◡^)".to_string(),
+                ]
+            }),
+            excited: p
+                .excited
+                .unwrap_or_else(|| vec!["(ᵔ◡◡ᵔ)".to_string(), "(✜‿‿✜)".to_string()]),
             grateful: p.grateful.unwrap_or_else(|| vec!["(^‿‿^)".to_string()]),
-            motivated: p.motivated.unwrap_or_else(|| vec!["(☼‿‿☼)".to_string(), "(★‿★)".to_string(), "(•̀ᴗ•́)".to_string()]),
-            demotivated: p.demotivated.unwrap_or_else(|| vec!["(≖__≖)".to_string(), "(￣ヘ￣)".to_string(), "(¬_¬)".to_string()]),
+            motivated: p.motivated.unwrap_or_else(|| {
+                vec![
+                    "(☼‿‿☼)".to_string(),
+                    "(★‿★)".to_string(),
+                    "(•̀ᴗ•́)".to_string(),
+                ]
+            }),
+            demotivated: p.demotivated.unwrap_or_else(|| {
+                vec![
+                    "(≖__≖)".to_string(),
+                    "(￣ヘ￣)".to_string(),
+                    "(¬_¬)".to_string(),
+                ]
+            }),
             smart: p.smart.unwrap_or_else(|| vec!["(✜‿‿✜)".to_string()]),
-            lonely: p.lonely.unwrap_or_else(|| vec!["(ب__ب)".to_string(), "(｡•́︿•̀｡)".to_string(), "(︶︹︺)".to_string()]),
-            sad: p.sad.unwrap_or_else(|| vec!["(╥☁╥ )".to_string(), "(╥﹏╥)".to_string(), "(ಥ﹏ಥ)".to_string()]),
-            angry: p.angry.unwrap_or_else(|| vec!["(-_-')".to_string(), "(⇀__⇀)".to_string(), "(`___´)".to_string()]),
-            friend: p.friend.unwrap_or_else(|| vec!["(♥‿‿♥)".to_string(), "(♡‿‿♡)".to_string(), "(♥‿♥ )".to_string(), "(♥ω♥ )".to_string()]),
+            lonely: p.lonely.unwrap_or_else(|| {
+                vec![
+                    "(ب__ب)".to_string(),
+                    "(｡•́︿•̀｡)".to_string(),
+                    "(︶︹︺)".to_string(),
+                ]
+            }),
+            sad: p.sad.unwrap_or_else(|| {
+                vec![
+                    "(╥☁╥ )".to_string(),
+                    "(╥﹏╥)".to_string(),
+                    "(ಥ﹏ಥ)".to_string(),
+                ]
+            }),
+            angry: p.angry.unwrap_or_else(|| {
+                vec![
+                    "(-_-')".to_string(),
+                    "(⇀__⇀)".to_string(),
+                    "(`___´)".to_string(),
+                ]
+            }),
+            friend: p.friend.unwrap_or_else(|| {
+                vec![
+                    "(♥‿‿♥)".to_string(),
+                    "(♡‿‿♡)".to_string(),
+                    "(♥‿♥ )".to_string(),
+                    "(♥ω♥ )".to_string(),
+                ]
+            }),
             broken: p.broken.unwrap_or_else(|| vec!["(☓‿‿☓)".to_string()]),
-            upload: p.upload.unwrap_or_else(|| vec!["(1__0)".to_string(), "(1__1)".to_string(), "(0__1)".to_string()]),
+            upload: p.upload.unwrap_or_else(|| {
+                vec![
+                    "(1__0)".to_string(),
+                    "(1__1)".to_string(),
+                    "(0__1)".to_string(),
+                ]
+            }),
             png: p.png.unwrap_or(false),
         };
     }
@@ -225,7 +304,9 @@ pub fn migrate_config(legacy: LegacyConfig) -> super::schema::PwnConfig {
         if let Some(disp) = ui.display {
             config.ui.display.enabled = disp.enabled.unwrap_or(true);
             config.ui.display.rotation = disp.rotation.unwrap_or(180);
-            config.ui.display.display_type = disp.display_type.unwrap_or_else(|| "waveshare_v4".to_string());
+            config.ui.display.display_type = disp
+                .display_type
+                .unwrap_or_else(|| "waveshare_v4".to_string());
         }
 
         if let Some(faces) = ui.faces {
@@ -237,17 +318,22 @@ pub fn migrate_config(legacy: LegacyConfig) -> super::schema::PwnConfig {
 
     // Migrate bettercap
     if let Some(bc) = legacy.bettercap {
-        config.bettercap.handshakes = bc.handshakes.unwrap_or_else(|| "/etc/pwnghost/handshakes".to_string());
+        config.bettercap.handshakes = bc
+            .handshakes
+            .unwrap_or_else(|| "/etc/pwnghost/handshakes".to_string());
         config.bettercap.silence = bc.silence.unwrap_or_else(super::schema::default_silence);
     }
 
     // Migrate plugins
     if let Some(plugins) = legacy.plugins {
         for (name, plugin) in plugins {
-            config.plugins.insert(name, super::schema::PluginConfig {
-                enabled: plugin.enabled.unwrap_or(true),
-                options: plugin.options,
-            });
+            config.plugins.insert(
+                name,
+                super::schema::PluginConfig {
+                    enabled: plugin.enabled.unwrap_or(true),
+                    options: plugin.options,
+                },
+            );
         }
     }
 
@@ -313,10 +399,13 @@ mod tests {
             }),
             plugins: Some({
                 let mut m = HashMap::new();
-                m.insert("test_plugin".to_string(), LegacyPluginConfig {
-                    enabled: Some(false),
-                    options: HashMap::new(),
-                });
+                m.insert(
+                    "test_plugin".to_string(),
+                    LegacyPluginConfig {
+                        enabled: Some(false),
+                        options: HashMap::new(),
+                    },
+                );
                 m
             }),
         };

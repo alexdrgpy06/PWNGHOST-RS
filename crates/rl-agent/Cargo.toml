@@ -12,6 +12,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+rand = { workspace = true }
 
 pwncore = { path = "../pwncore" }
 config = { path = "../config" }

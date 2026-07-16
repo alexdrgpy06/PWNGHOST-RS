@@ -53,6 +53,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install ARM cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -64,6 +69,11 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cross-compile check
+        env:
+          CC_arm_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+          CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+          CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
         run: cargo check --workspace --target ${{ matrix.target }}
 
   lint:

@@ -264,7 +264,10 @@ pub fn build_args(config: &AngryOxideConfig) -> Result<Vec<String>> {
 }
 
 /// Generate args for a specific personality/profile
-pub fn build_personality_args(personality: &str, base_config: &AngryOxideConfig) -> Result<Vec<String>> {
+pub fn build_personality_args(
+    personality: &str,
+    base_config: &AngryOxideConfig,
+) -> Result<Vec<String>> {
     let mut config = base_config.clone();
 
     match personality {
@@ -325,6 +328,7 @@ pub fn validate_config(config: &AngryOxideConfig) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 

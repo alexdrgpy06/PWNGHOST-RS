@@ -1,21 +1,24 @@
 //! PWNGHOST-RS Main Binary
 
-use clap::Parser;
-use config::{load_config, PwnConfig};
-use fw_patcher::apply_on_first_boot;
 use agent::Agent;
 use angryoxide::init as init_angryoxide;
+use clap::Parser;
+use config::load_config;
+use fw_patcher::apply_on_first_boot;
 use radio::RadioManager;
+use std::path::PathBuf;
+use tokio::signal;
+use tracing::{error, info, warn};
+use tracing_subscriber::EnvFilter;
 use ui::display::Display;
 use ui::web::WebServer;
-use tracing::{info, error, warn};
-use tracing_subscriber::{fmt, EnvFilter};
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::signal;
 
 #[derive(Parser, Debug)]
-#[command(name = "pwnghost-rs", version, about = "PWNGHOST-RS - Rust Pwnagotchi Implementation")]
+#[command(
+    name = "pwnghost-rs",
+    version,
+    about = "PWNGHOST-RS - Rust Pwnagotchi Implementation"
+)]
 struct Args {
     /// Configuration file path
     #[arg(short, long, default_value = "/etc/pwnghost/config.toml")]
@@ -58,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     // Apply firmware patches on first boot
     if args.patch_firmware {
         info!("Applying firmware patches...");
-        apply_on_first_boot(PathBuf::from("/lib/firmware/brcm")).await?;
+        apply_on_first_boot(&PathBuf::from("/lib/firmware/brcm")).await?;
     }
 
     // Initialize firmware monitor
@@ -73,7 +76,19 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize display if enabled
     let display = if config.ui.display.enabled {
-        Some(Display::new(config.ui.display.clone())?)
+        let disp_cfg = ui::display::DisplayConfig {
+            rotation: match config.ui.display.rotation {
+                90 => ui::display::DisplayRotation::Rotate90,
+                180 => ui::display::DisplayRotation::Rotate180,
+                270 => ui::display::DisplayRotation::Rotate270,
+                _ => ui::display::DisplayRotation::Rotate0,
+            },
+            display_type: ui::display::DisplayType::from_config_str(
+                &config.ui.display.display_type,
+            ),
+            ..Default::default()
+        };
+        Some(Display::new(disp_cfg)?)
     } else {
         None
     };
@@ -86,11 +101,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Create agent
-    let mut agent = Agent::new(config.personality.clone());
+    let mut agent = Agent::new(agent::Personality::new(config.personality.clone().into()));
 
     // Start web server in background
     if let Some(web) = web_server {
-        let addr = format!("{}:{}", config.ui.web.address, config.ui.web.port).parse()?;
+        let addr: std::net::SocketAddr =
+            format!("{}:{}", config.ui.web.address, config.ui.web.port).parse()?;
         tokio::spawn(async move {
             if let Err(e) = web.serve(addr).await {
                 error!("Web server error: {}", e);
@@ -110,7 +126,9 @@ async fn main() -> anyhow::Result<()> {
     info!("Entering main loop");
     agent.start();
 
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(config.oxigotchi.epoch_duration as u64));
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+        config.oxigotchi.epoch_duration as u64,
+    ));
 
     loop {
         tokio::select! {
@@ -118,10 +136,32 @@ async fn main() -> anyhow::Result<()> {
                 // Tick agent
                 let (face, action) = agent.tick();
 
-                // Update display
+                // Update display with the current frame
                 if let Some(ref d) = display {
-                    // d.draw_pwnagotchi_frame(...).await?;
-                    // d.update(true).await?;
+                    let uptime = format!("{}s", agent.start.elapsed().as_secs());
+                    let mode = format!("{:?}", agent.current_mood());
+                    if let Err(e) = d
+                        .draw_pwnagotchi_frame(
+                            agent.current_channel(),
+                            0,
+                            false,
+                            &uptime,
+                            &config.main.name,
+                            "",
+                            face,
+                            agent.epoch_tracker.current.handshakes_this_epoch,
+                            0,
+                            &mode,
+                            None,
+                            0,
+                            0,
+                        )
+                        .await
+                    {
+                        warn!("Display draw failed: {}", e);
+                    } else if let Err(e) = d.update(true).await {
+                        warn!("Display update failed: {}", e);
+                    }
                 }
 
                 // Execute action

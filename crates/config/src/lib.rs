@@ -4,10 +4,10 @@ pub mod migrate;
 pub mod schema;
 
 pub use migrate::migrate_config;
-pub use schema::{PwnConfig, load_config, save_config, default_config};
+pub use schema::{MainConfig, PersonalityConfig, PwnConfig, UiConfig};
 
-use anyhow::Result;
-use figment::providers::{Env, Format, Toml};
+use anyhow::{Context, Result};
+use figment::providers::{Env, Format, Serialized, Toml};
 use figment::Figment;
 use std::path::Path;
 use tokio::fs;
@@ -17,13 +17,12 @@ pub async fn load_config<P: AsRef<Path>>(path: P) -> Result<PwnConfig> {
     let config_path = path.as_ref();
 
     // Start with defaults
-    let mut figment = Figment::new()
-        .merge(Figment::from(PwnConfig::default()))
+    let mut figment = Figment::from(Serialized::defaults(PwnConfig::default()))
         .merge(Env::prefixed("PWNGHOST").split("__"));
 
     // Load main config file if exists
     if config_path.exists() {
-        figment = figment.merge(Toml::file(config_path).required(false));
+        figment = figment.merge(Toml::file(config_path));
     }
 
     // Load conf.d/*.toml files
@@ -36,19 +35,20 @@ pub async fn load_config<P: AsRef<Path>>(path: P) -> Result<PwnConfig> {
         let mut entries = Vec::new();
         let mut dir = fs::read_dir(&conf_dir).await?;
         while let Some(entry) = dir.next_entry().await? {
-            if entry.path().extension().map_or(false, |ext| ext == "toml") {
+            if entry.path().extension().is_some_and(|ext| ext == "toml") {
                 entries.push(entry);
             }
         }
         entries.sort_by_key(|e| e.file_name());
 
         for entry in entries {
-            figment = figment.merge(Toml::file(entry.path()).required(false));
+            figment = figment.merge(Toml::file(entry.path()));
         }
     }
 
-    let figment = figment.build().context("Failed to build configuration")?;
-    let mut cfg: PwnConfig = figment.extract().context("Failed to deserialize configuration")?;
+    let mut cfg: PwnConfig = figment
+        .extract()
+        .context("Failed to deserialize configuration")?;
 
     // Validate and fix up config
     cfg.validate_and_fix().await?;

@@ -1,49 +1,69 @@
-//! Font handling for e-ink display
+//! Font handling for the display.
+//!
+//! Wraps `embedded-graphics` built-in monospace ASCII fonts and exposes a
+//! small registry so callers can look them up by name.
 
-use embedded_graphics::mono_font::MonoFont;
+use embedded_graphics::mono_font::{ascii, MonoFont};
 use std::collections::HashMap;
 
-/// Font registry
+/// Font registry mapping names to built-in monospace fonts.
 pub struct FontRegistry {
-    fonts: HashMap<String, &'static MonoFont>,
+    fonts: HashMap<String, &'static MonoFont<'static>>,
 }
 
 impl FontRegistry {
     pub fn new() -> Self {
-        let mut registry = Self { fonts: HashMap::new() };
+        let mut registry = Self {
+            fonts: HashMap::new(),
+        };
         registry.register_builtin_fonts();
         registry
     }
 
     fn register_builtin_fonts(&mut self) {
-        // In real implementation, these would be embedded fonts
-        // self.fonts.insert("dejavu".to_string(), DEJAVU_SANS_MONO_12);
-        // self.fonts.insert("dejavu_bold".to_string(), DEJAVU_SANS_MONO_BOLD_12);
-        // self.fonts.insert("kaomoji".to_string(), KAOMOJI_FONT);
+        self.fonts.insert("small".to_string(), &ascii::FONT_6X10);
+        self.fonts.insert("regular".to_string(), &ascii::FONT_8X13);
+        self.fonts
+            .insert("bold".to_string(), &ascii::FONT_9X15_BOLD);
+        self.fonts.insert("large".to_string(), &ascii::FONT_10X20);
     }
 
-    pub fn get(&self, name: &str) -> Option<&'static MonoFont> {
+    pub fn get(&self, name: &str) -> Option<&'static MonoFont<'static>> {
         self.fonts.get(name).copied()
     }
 
-    pub fn register(&mut self, name: String, font: &'static MonoFont) {
+    pub fn register(&mut self, name: String, font: &'static MonoFont<'static>) {
         self.fonts.insert(name, font);
+    }
+
+    pub fn len(&self) -> usize {
+        self.fonts.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.fonts.is_empty()
     }
 }
 
-/// Get default font for UI
-pub fn default_font() -> Option<&'static MonoFont> {
-    None // Would return actual font in real implementation
+impl Default for FontRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-/// Get bold font for headers
-pub fn bold_font() -> Option<&'static MonoFont> {
-    None
+/// Default font for body text.
+pub fn default_font() -> &'static MonoFont<'static> {
+    &ascii::FONT_6X10
 }
 
-/// Get small font for status
-pub fn small_font() -> Option<&'static MonoFont> {
-    None
+/// Bold font for headers.
+pub fn bold_font() -> &'static MonoFont<'static> {
+    &ascii::FONT_9X15_BOLD
+}
+
+/// Small font for the status bar.
+pub fn small_font() -> &'static MonoFont<'static> {
+    &ascii::FONT_6X10
 }
 
 #[cfg(test)]
@@ -53,6 +73,9 @@ mod tests {
     #[test]
     fn test_font_registry() {
         let registry = FontRegistry::new();
-        // Just verify it creates without error
+        assert!(!registry.is_empty());
+        assert!(registry.get("small").is_some());
+        assert!(registry.get("bold").is_some());
+        assert!(registry.get("nonexistent").is_none());
     }
 }

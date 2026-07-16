@@ -17,8 +17,7 @@ fw-patcher = { path = "../fw-patcher" }
 angryoxide = { path = "../angryoxide" }
 radio = { path = "../radio" }
 rl-agent = { path = "../rl-agent" }
-ui-display = { path = "../ui/display" }
-ui-web = { path = "../ui/web" }
+ui = { path = "../ui" }
 
 [build-dependencies]
 anyhow = { workspace = true }

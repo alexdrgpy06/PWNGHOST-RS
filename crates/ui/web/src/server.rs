@@ -1,35 +1,16 @@
 //! Web server for PWNGHOST-RS
 
-use axum::{
-    Router,
-    routing::{get, post},
-    extract::State,
-    response::Html,
-    middleware,
-};
 use axum::extract::ws::WebSocketUpgrade;
+use axum::{extract::State, response::Html, routing::get, Router};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
-use tower_http::cors::{CorsLayer, Any};
 use tracing::info;
 
-use crate::api::{get_status, get_session, get_config, update_config, get_peers, get_handshakes};
-use crate::ws::WebSocketManager;
-
-/// Application state shared across handlers
-pub struct AppState {
-    pub ws_manager: Arc<WebSocketManager>,
-    // Other state fields would go here
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            ws_manager: Arc::new(WebSocketManager::new()),
-        }
-    }
-}
+use crate::api::{
+    get_config, get_handshakes, get_peers, get_session, get_status, update_config, AppState,
+};
 
 /// Create the web application router
 pub fn create_router(state: Arc<RwLock<AppState>>) -> Router {
@@ -42,7 +23,12 @@ pub fn create_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/ws", get(websocket_handler))
         .nest_service("/static", ServeDir::new("static"))
         .route("/", get(index_handler))
-        .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
         .with_state(state)
 }
 
@@ -51,12 +37,15 @@ async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<RwLock<AppState>>>,
 ) -> impl axum::response::IntoResponse {
-    let state = state.read().await;
-    state.ws_manager.handle_upgrade(ws).await
+    let manager = {
+        let state = state.read().await;
+        state.ws_manager.clone()
+    };
+    manager.handle_upgrade(ws)
 }
 
 /// Index page handler
-async fn index_handler() -> Html<String> {
+async fn index_handler() -> Html<&'static str> {
     Html(include_str!("../templates/index.html"))
 }
 

@@ -2,11 +2,11 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use pwncore::{AccessPoint, Channel, Mood, Peer, PersonalityConfig};
+use pwncore::Mood;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Recovery state for persistence across reboots
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,7 +67,10 @@ impl RecoveryManager {
         if self.path.exists() {
             let content = fs::read_to_string(&self.path).await?;
             self.state = serde_json::from_str(&content)?;
-            info!("Loaded recovery state from {:?} (epoch {})", self.path, self.state.epoch);
+            info!(
+                "Loaded recovery state from {:?} (epoch {})",
+                self.path, self.state.epoch
+            );
         }
         Ok(())
     }
@@ -103,7 +106,7 @@ impl RecoveryManager {
         self.state.last_mood = agent.current_mood();
         self.state.last_face = agent.current_face().to_string();
         self.state.uptime_seconds = agent.start.elapsed().as_secs();
-        self.state.started_at = chrono::DateTime::from(agent.start);
+        self.state.started_at = agent.started_at;
     }
 }
 

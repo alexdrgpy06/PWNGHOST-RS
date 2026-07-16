@@ -10,11 +10,12 @@ pub mod policy;
 pub use agent::RlAgent;
 pub use buffer::RolloutBuffer;
 pub use checkpoint::CheckpointManager;
-pub use features::{extract_features, Features};
+pub use features::Features;
 pub use model::{ActorCritic, ModelConfig};
-pub use policy::{Policy, HeuristicPolicy, RlAction};
+pub use policy::{HeuristicPolicy, Policy, RlAction};
 
 use anyhow::Result;
+use tracing::info;
 
 /// RL Agent configuration
 #[derive(Debug, Clone)]
@@ -44,9 +45,23 @@ impl Default for RlAgentConfig {
 
 /// Initialize RL agent from config
 pub fn init_agent(config: &RlAgentConfig) -> Result<RlAgent> {
+    use anyhow::Context;
+
     if let Some(path) = &config.model_path {
-        // TODO: Load model from path when ML dependencies are available
-        todo!("Model loading not implemented yet")
+        let mut model = ActorCritic::new(ModelConfig {
+            input_dim: config.observation_dim,
+            hidden_size: config.hidden_size,
+            lstm_layers: config.lstm_layers,
+            action_dim: config.action_dim,
+            value_dim: 1,
+        });
+        model
+            .load(path)
+            .with_context(|| format!("Failed to load RL model from {path}"))?;
+        info!("Loaded RL model from {path}");
+        Ok(RlAgent::with_policy(Box::new(policy::ModelPolicy::new(
+            model,
+        ))))
     } else if config.use_heuristic_fallback {
         info!("Using heuristic policy (no model loaded)");
         Ok(RlAgent::new())

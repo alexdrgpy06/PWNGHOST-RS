@@ -12,17 +12,19 @@ pub mod recovery;
 pub use epoch::{EpochState, EpochTracker};
 pub use faces::face_for_mood;
 pub use healing::{Healer, HealingAction, HealingConfig, HealingLayer};
-pub use mesh::{Peer, PeerManager, build_mesh_ie, parse_mesh_ie};
+pub use mesh::{MeshManager, MeshPeer, MeshPeerInfo};
 pub use personality::Personality;
-pub use plugins::{LuaPlugin, PluginManager, PluginApi};
+pub use plugins::{LuaPlugin, PluginApi, PluginManager};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use pwncore::{AccessPoint, Channel, Mood, Peer as CorePeer, PersonalityConfig};
-use std::net::MacAddr;
+use mac_addr::MacAddr;
+use pwncore::{AccessPoint, Channel, Mood, Peer as CorePeer};
+use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// Main agent structure
 pub struct Agent {
@@ -36,6 +38,10 @@ pub struct Agent {
     aps: Vec<AccessPoint>,
     peers: Vec<CorePeer>,
     current_channel: u8,
+
+    // Timing
+    pub start: Instant,
+    pub started_at: DateTime<Utc>,
 
     // Shared state for plugins
     pub plugins: PluginManager,
@@ -57,6 +63,8 @@ impl Agent {
             aps: Vec::new(),
             peers: Vec::new(),
             current_channel: 1,
+            start: Instant::now(),
+            started_at: Utc::now(),
             plugins: PluginManager::new(),
             rl_agent: None,
             capture_manager: None,
@@ -78,10 +86,11 @@ impl Agent {
     /// Main tick: advance epoch, compute mood, produce action + face
     pub fn tick(&mut self) -> (&'static str, AgentAction) {
         // Finalize previous epoch counters
-        self.epoch_tracker.finalize_current(&self.personality);
+        self.epoch_tracker.finalize_current();
 
-        // Advance to next epoch
-        self.epoch_tracker.advance();
+        // Advance to next epoch (staying on the current channel)
+        let channel = Channel::new(self.current_channel).unwrap_or(Channel(1));
+        self.epoch_tracker.advance(channel);
 
         // Observe current environment
         {
@@ -90,17 +99,15 @@ impl Agent {
         }
 
         // Compute mood from epoch state
-        self.current_mood = Mood::from_epoch(
-            &self.epoch_tracker.current,
-            &self.personality.config,
-            &self.peers,
-        );
+        self.current_mood = self
+            .personality
+            .compute_mood(&self.epoch_tracker.current, &self.peers);
 
         // Select action based on state
         let action = self.select_action();
 
         // Get face for current mood
-        let face = face_for_mood(&self.current_mood);
+        let face = face_for_mood(self.current_mood);
 
         (face, action)
     }
@@ -122,16 +129,28 @@ impl Agent {
             match action {
                 HealingAction::None => {}
                 HealingAction::RestartAo => {
-                    warn!("Healer: Restarting AngryOxide (layer {:?})", self.healer.active_layer());
+                    warn!(
+                        "Healer: Restarting AngryOxide (layer {:?})",
+                        self.healer.active_layer()
+                    );
                 }
                 HealingAction::PowerCycleGpio => {
-                    error!("Healer: Power-cycling WiFi chip (layer {:?})", self.healer.active_layer());
+                    error!(
+                        "Healer: Power-cycling WiFi chip (layer {:?})",
+                        self.healer.active_layer()
+                    );
                 }
                 HealingAction::EnterSafeMode => {
-                    error!("Healer: Entering safe mode (layer {:?})", self.healer.active_layer());
+                    error!(
+                        "Healer: Entering safe mode (layer {:?})",
+                        self.healer.active_layer()
+                    );
                 }
                 HealingAction::EnableUsbLifeline => {
-                    error!("Healer: Enabling USB lifeline (layer {:?})", self.healer.active_layer());
+                    error!(
+                        "Healer: Enabling USB lifeline (layer {:?})",
+                        self.healer.active_layer()
+                    );
                 }
             }
             action
@@ -148,10 +167,10 @@ impl Agent {
     /// Select next action based on epoch state, mood, and personality
     fn select_action(&self) -> AgentAction {
         let epoch = &self.epoch_tracker.current;
-        let p = &self.personality.config;
+        let p = self.personality.config();
 
-        // Blind epochs: no APs seen, hop to find signal
-        if epoch.blind_epochs > 0 && epoch.blind_epochs >= 2 {
+        // Blind epochs: no APs seen for a couple of epochs, hop to find signal
+        if epoch.blind_epochs >= 2 {
             return AgentAction::Hop(Self::next_channel(self.current_channel));
         }
 
@@ -167,7 +186,7 @@ impl Agent {
                     }
                 }
                 // Time to hop
-                let hop_time = p.calc_hop_time(epoch);
+                let hop_time = self.personality.calc_hop_time(epoch) as u32;
                 if hop_time > 0 && epoch.duration().num_seconds() as u32 >= hop_time {
                     return AgentAction::Hop(Self::next_channel(self.current_channel));
                 }
@@ -183,7 +202,7 @@ impl Agent {
             }
             _ => {
                 // Default: recon on current channel
-                let recon_time = p.calc_recon_time(epoch);
+                let recon_time = self.personality.calc_recon_time(epoch) as u32;
                 if epoch.duration().num_seconds() as u32 >= recon_time {
                     AgentAction::Hop(Self::next_channel(self.current_channel))
                 } else {
@@ -195,7 +214,7 @@ impl Agent {
 
     /// Find best target AP on current channel
     fn find_target(&self) -> Option<&AccessPoint> {
-        let p = &self.personality.config;
+        let p = self.personality.config();
 
         for ap in &self.aps {
             if ap.channel.value() != self.current_channel {
@@ -225,7 +244,7 @@ impl Agent {
 
     /// Get current face
     pub fn current_face(&self) -> &'static str {
-        face_for_mood(&self.current_mood)
+        face_for_mood(self.current_mood)
     }
 
     /// Update AP list (called from event handler)
@@ -240,7 +259,7 @@ impl Agent {
 
     /// Set current channel
     pub fn set_channel(&mut self, channel: u8) {
-        if channel >= 1 && channel <= 14 {
+        if (1..=14).contains(&channel) {
             self.current_channel = channel;
             self.epoch_tracker.current.track_hop();
         }
@@ -268,7 +287,7 @@ impl Agent {
         match event {
             angryoxide::parser::AoEvent::Ap(ap_event) => {
                 let bssid = MacAddr::from_str(&ap_event.bssid).unwrap_or_default();
-                let encryption = pwncore::ap::EncryptionType::from_str(&ap_event.encryption);
+                let encryption = pwncore::EncryptionType::from_str(&ap_event.encryption);
                 let mut ap = AccessPoint::new(
                     bssid,
                     ap_event.channel,
@@ -285,12 +304,8 @@ impl Agent {
                     .unwrap_or(DateTime::UNIX_EPOCH);
                 for ci in &ap_event.clients {
                     let client_mac = MacAddr::from_str(&ci.mac).unwrap_or_default();
-                    let client = pwncore::Station::new(
-                        client_mac,
-                        ci.vendor.clone(),
-                        ci.rssi,
-                        ci.channel,
-                    );
+                    let client =
+                        pwncore::Station::new(client_mac, ci.vendor.clone(), ci.rssi, ci.channel);
                     ap.add_client(client);
                 }
                 if self.add_or_update_ap(ap) {
@@ -310,9 +325,8 @@ impl Agent {
                         ap.add_client(client);
                     }
                 }
-                self.epoch_tracker.current.clients_seen = self.aps.iter()
-                    .map(|ap| ap.clients.len())
-                    .sum();
+                self.epoch_tracker.current.clients_seen =
+                    self.aps.iter().map(|ap| ap.clients.len()).sum();
             }
             angryoxide::parser::AoEvent::Handshake(hs_event) => {
                 if let Ok(bssid) = MacAddr::from_str(&hs_event.bssid) {
@@ -365,6 +379,7 @@ impl Default for Agent {
 }
 
 /// Capture manager for handling handshake files
+#[allow(dead_code)]
 pub struct CaptureManager {
     staging_dir: std::path::PathBuf,
     final_dir: std::path::PathBuf,
@@ -374,7 +389,7 @@ impl CaptureManager {
     pub fn new(staging: std::path::PathBuf, final_dir: std::path::PathBuf) -> Self {
         Self {
             staging_dir: staging,
-            final_dir: final_dir,
+            final_dir,
         }
     }
 
@@ -383,7 +398,7 @@ impl CaptureManager {
         Ok(vec![])
     }
 
-    pub async fn validate_and_move(&self, path: &std::path::Path) -> Result<bool> {
+    pub async fn validate_and_move(&self, _path: &std::path::Path) -> Result<bool> {
         // Validate handshake quality and move to final dir
         Ok(true)
     }
@@ -460,22 +475,30 @@ mod tests {
 
     #[test]
     fn test_agent_selects_deauth_with_targets() {
-        let p = PersonalityConfig::default();
+        let p = crate::personality::PersonalityConfig::default();
         let mut agent = Agent::new(Personality::new(p));
         agent.start();
 
         // Add an AP on current channel
         let ap = AccessPoint::new(
             "aa:bb:cc:dd:ee:ff".parse().unwrap(),
-            1, -50,
-            pwncore::ap::EncryptionType::Wpa2,
+            1,
+            -50,
+            pwncore::EncryptionType::Wpa2,
             "test".into(),
         );
         agent.aps = vec![ap];
 
         let (_face, action) = agent.tick();
         assert!(!agent.current_face().is_empty());
-        matches!(action, AgentAction::Stay | AgentAction::Hop(_) | AgentAction::Deauth(_) | AgentAction::Associate(_) | AgentAction::Sleep(_));
+        matches!(
+            action,
+            AgentAction::Stay
+                | AgentAction::Hop(_)
+                | AgentAction::Deauth(_)
+                | AgentAction::Associate(_)
+                | AgentAction::Sleep(_)
+        );
     }
 
     #[test]
@@ -516,7 +539,7 @@ mod tests {
         let event = angryoxide::parser::AoEvent::Handshake(hs_event);
         agent.handle_event(&event);
 
-        assert_eq!(agent.epoch_tracker.current.handshakes_captured, 1);
+        assert_eq!(agent.epoch_tracker.current.handshakes_this_epoch, 1);
     }
 
     #[test]
@@ -540,8 +563,14 @@ mod tests {
         agent.start();
 
         let events = vec![
-            angryoxide::parser::AoEvent::Channel(angryoxide::parser::ChannelEvent { channel: 6, timestamp: 1 }),
-            angryoxide::parser::AoEvent::Channel(angryoxide::parser::ChannelEvent { channel: 11, timestamp: 2 }),
+            angryoxide::parser::AoEvent::Channel(angryoxide::parser::ChannelEvent {
+                channel: 6,
+                timestamp: 1,
+            }),
+            angryoxide::parser::AoEvent::Channel(angryoxide::parser::ChannelEvent {
+                channel: 11,
+                timestamp: 2,
+            }),
         ];
         agent.handle_events(&events);
         assert_eq!(agent.current_channel, 11);

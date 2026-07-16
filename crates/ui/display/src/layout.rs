@@ -1,13 +1,15 @@
-//! Layout engine for e-ink display
+//! Layout engine for the display.
+//!
+//! Renders the pwnagotchi status frame into a 1-bit-per-pixel packed
+//! framebuffer using `embedded-graphics` and its built-in ASCII fonts.
 
 use anyhow::Result;
 use embedded_graphics::{
-    mono_font::{MonoFont, MonoTextStyle},
+    mono_font::{ascii::FONT_6X10, ascii::FONT_9X15, MonoTextStyle},
     pixelcolor::BinaryColor,
     prelude::*,
     text::{Alignment, Text},
 };
-use std::collections::HashMap;
 
 /// Layout configuration
 #[derive(Debug, Clone)]
@@ -35,23 +37,80 @@ impl Default for LayoutConfig {
     }
 }
 
+/// A borrowed 1bpp packed framebuffer that implements `DrawTarget`.
+///
+/// Bit layout: pixel `(x, y)` maps to bit `y * width + x`, packed LSB-first
+/// into `buffer`. Out-of-bounds pixels are ignored.
+struct FrameBuffer<'a> {
+    buffer: &'a mut [u8],
+    width: u32,
+    height: u32,
+}
+
+impl<'a> FrameBuffer<'a> {
+    fn new(buffer: &'a mut [u8], width: u32, height: u32) -> Self {
+        Self {
+            buffer,
+            width,
+            height,
+        }
+    }
+
+    fn set_pixel(&mut self, x: i32, y: i32, on: bool) {
+        if x < 0 || y < 0 || x as u32 >= self.width || y as u32 >= self.height {
+            return;
+        }
+        let index = y as usize * self.width as usize + x as usize;
+        let byte = index / 8;
+        let bit = (index % 8) as u8;
+        if byte >= self.buffer.len() {
+            return;
+        }
+        if on {
+            self.buffer[byte] |= 1 << bit;
+        } else {
+            self.buffer[byte] &= !(1 << bit);
+        }
+    }
+}
+
+impl OriginDimensions for FrameBuffer<'_> {
+    fn size(&self) -> Size {
+        Size::new(self.width, self.height)
+    }
+}
+
+impl DrawTarget for FrameBuffer<'_> {
+    type Color = BinaryColor;
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> core::result::Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for Pixel(coord, color) in pixels {
+            self.set_pixel(coord.x, coord.y, color.is_on());
+        }
+        Ok(())
+    }
+}
+
 /// Layout engine for drawing pwnagotchi frames
 pub struct LayoutEngine {
     config: LayoutConfig,
-    fonts: HashMap<String, &'static MonoFont>,
 }
 
 impl LayoutEngine {
     pub fn new(config: LayoutConfig) -> Self {
-        let mut fonts = HashMap::new();
-        // In real implementation, load embedded fonts
-        // fonts.insert("dejavu".to_string(), DEJAVU_FONT);
-        // fonts.insert("dejavu_bold".to_string(), DEJAVU_BOLD_FONT);
-
-        Self { config, fonts }
+        Self { config }
     }
 
-    /// Draw complete pwnagotchi frame
+    pub fn config(&self) -> &LayoutConfig {
+        &self.config
+    }
+
+    /// Draw a complete pwnagotchi frame into `buffer`.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_pwnagotchi_frame(
         &self,
         buffer: &mut [u8],
@@ -71,17 +130,58 @@ impl LayoutEngine {
         ram_used: u64,
         ram_total: u64,
     ) -> Result<()> {
-        // This is a simplified version - real implementation would use embedded_graphics
-        // For now, we just document the layout
+        let mut fb = FrameBuffer::new(buffer, width, height);
+        let small = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+        let big = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
 
-        // Face at (face_x, face_y)
-        // Status line at (status_x, status_y): Channel, APs, BT
-        // Info line at (info_x, info_y): Uptime, Name, Level, Handshakes
+        // Top status bar: name + channel + APs + BT.
+        let bt = if bt_connected { "BT" } else { "--" };
+        let status = format!("{name} CH{channel} AP{aps_count} {bt}");
+        draw_line(&mut fb, &status, &small, self.config.status_x.min(0), 8)?;
+
+        // Face and phrase in the middle.
+        draw_line(
+            &mut fb,
+            face,
+            &big,
+            self.config.face_x,
+            self.config.face_y + 24,
+        )?;
+        draw_line(
+            &mut fb,
+            phrase,
+            &small,
+            self.config.face_x,
+            self.config.face_y + 44,
+        )?;
+
+        // Info bar: uptime, level/xp, handshakes, mode.
+        let info = format!("UP {uptime}  L{level}  HS{handshakes}  {mode}");
+        draw_line(
+            &mut fb,
+            &info,
+            &small,
+            self.config.info_x,
+            self.config.info_y,
+        )?;
+
+        // Resource footer.
+        let temp = cpu_temp
+            .map(|t| format!("{t:.0}C"))
+            .unwrap_or_else(|| "--".to_string());
+        let footer = format!("T{temp} RAM {ram_used}/{ram_total}MB");
+        draw_line(
+            &mut fb,
+            &footer,
+            &small,
+            self.config.info_x,
+            self.config.info_y + 12,
+        )?;
 
         Ok(())
     }
 
-    /// Draw centered text
+    /// Draw a single line of text centered horizontally.
     pub fn draw_text_centered(
         &self,
         buffer: &mut [u8],
@@ -89,11 +189,20 @@ impl LayoutEngine {
         height: u32,
         text: &str,
     ) -> Result<()> {
-        // Implementation would use embedded_graphics
+        let mut fb = FrameBuffer::new(buffer, width, height);
+        let style = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
+        Text::with_alignment(
+            text,
+            Point::new(width as i32 / 2, height as i32 / 2),
+            style,
+            Alignment::Center,
+        )
+        .draw(&mut fb)
+        .ok();
         Ok(())
     }
 
-    /// Draw text at position
+    /// Draw text at an explicit position.
     pub fn draw_text(
         &self,
         buffer: &mut [u8],
@@ -102,52 +211,22 @@ impl LayoutEngine {
         text: &str,
         x: i32,
         y: i32,
-        font: &str,
     ) -> Result<()> {
-        Ok(())
+        let mut fb = FrameBuffer::new(buffer, width, height);
+        let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+        draw_line(&mut fb, text, &style, x, y)
     }
+}
 
-    /// Draw kaomoji face
-    pub fn draw_face(
-        &self,
-        buffer: &mut [u8],
-        width: u32,
-        height: u32,
-        face: &str,
-        x: i32,
-        y: i32,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Draw status bar
-    pub fn draw_status_bar(
-        &self,
-        buffer: &mut [u8],
-        width: u32,
-        height: u32,
-        channel: u8,
-        aps: usize,
-        bt: bool,
-        y: i32,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Draw info bar
-    pub fn draw_info_bar(
-        &self,
-        buffer: &mut [u8],
-        width: u32,
-        height: u32,
-        uptime: &str,
-        name: &str,
-        level: u32,
-        handshakes: u32,
-        y: i32,
-    ) -> Result<()> {
-        Ok(())
-    }
+fn draw_line(
+    fb: &mut FrameBuffer<'_>,
+    text: &str,
+    style: &MonoTextStyle<'_, BinaryColor>,
+    x: i32,
+    y: i32,
+) -> Result<()> {
+    Text::new(text, Point::new(x, y), *style).draw(fb).ok();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -159,5 +238,18 @@ mod tests {
         let config = LayoutConfig::default();
         assert_eq!(config.face_x, 0);
         assert_eq!(config.face_y, 16);
+    }
+
+    #[test]
+    fn test_draw_sets_pixels() {
+        let width = 128u32;
+        let height = 64u32;
+        let mut buffer = vec![0u8; (width * height / 8) as usize];
+        let engine = LayoutEngine::new(LayoutConfig::default());
+        engine
+            .draw_text(&mut buffer, width, height, "HELLO", 0, 12)
+            .unwrap();
+        // Some pixels should now be set.
+        assert!(buffer.iter().any(|&b| b != 0));
     }
 }

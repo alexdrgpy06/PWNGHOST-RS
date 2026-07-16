@@ -2,10 +2,9 @@
 //!
 //! Reads BCM43436B0 firmware crash counters via netlink to nexmon driver
 
-use anyhow::{Context, Result};
-use libc::{c_void, c_int, c_uint, c_ulong, sockaddr_nl, AF_NETLINK, SOCK_RAW, timeval, setsockopt, SOL_SOCKET, SO_RCVTIMEO};
+use anyhow::Result;
+use libc::{c_int, c_uint, c_void, sockaddr_nl, timeval, AF_NETLINK, SOCK_RAW, SOL_SOCKET};
 use std::mem;
-use std::os::unix::io::AsRawFd;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
@@ -189,7 +188,12 @@ pub async fn sdio_read(addr: u32, length: u32) -> Result<Vec<u8>> {
         // Bind
         let mut sa: sockaddr_nl = mem::zeroed();
         sa.nl_family = AF_NETLINK as u16;
-        if libc::bind(fd, &sa as *const _ as *const libc::sockaddr, mem::size_of::<sockaddr_nl>() as u32) < 0 {
+        if libc::bind(
+            fd,
+            &sa as *const _ as *const libc::sockaddr,
+            mem::size_of::<sockaddr_nl>() as u32,
+        ) < 0
+        {
             libc::close(fd);
             return Err(anyhow::anyhow!(
                 "netlink bind failed: {}",
@@ -198,8 +202,17 @@ pub async fn sdio_read(addr: u32, length: u32) -> Result<Vec<u8>> {
         }
 
         // Set timeout
-        let tv = timeval { tv_sec: 3, tv_usec: 0 };
-        libc::setsockopt(fd, SOL_SOCKET, libc::SO_RCVTIMEO, &tv as *const _ as *const c_void, mem::size_of::<timeval>() as u32);
+        let tv = timeval {
+            tv_sec: 3,
+            tv_usec: 0,
+        };
+        libc::setsockopt(
+            fd,
+            SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &tv as *const _ as *const c_void,
+            mem::size_of::<timeval>() as u32,
+        );
 
         // Send
         let sent = libc::send(fd, frame.as_ptr() as *const c_void, frame.len(), 0);
@@ -256,7 +269,12 @@ pub async fn sdio_write(addr: u32, data: &[u8]) -> Result<()> {
 
         let mut sa: sockaddr_nl = mem::zeroed();
         sa.nl_family = AF_NETLINK as u16;
-        if libc::bind(fd, &sa as *const _ as *const libc::sockaddr, mem::size_of::<sockaddr_nl>() as u32) < 0 {
+        if libc::bind(
+            fd,
+            &sa as *const _ as *const libc::sockaddr,
+            mem::size_of::<sockaddr_nl>() as u32,
+        ) < 0
+        {
             libc::close(fd);
             return Err(anyhow::anyhow!(
                 "netlink bind failed: {}",
@@ -264,8 +282,17 @@ pub async fn sdio_write(addr: u32, data: &[u8]) -> Result<()> {
             ));
         }
 
-        let tv = timeval { tv_sec: 3, tv_usec: 0 };
-        libc::setsockopt(fd, SOL_SOCKET, libc::SO_RCVTIMEO, &tv as *const _ as *const c_void, mem::size_of::<timeval>() as u32);
+        let tv = timeval {
+            tv_sec: 3,
+            tv_usec: 0,
+        };
+        libc::setsockopt(
+            fd,
+            SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &tv as *const _ as *const c_void,
+            mem::size_of::<timeval>() as u32,
+        );
 
         let sent = libc::send(fd, frame.as_ptr() as *const c_void, frame.len(), 0);
         libc::close(fd);
@@ -283,7 +310,10 @@ pub async fn sdio_write(addr: u32, data: &[u8]) -> Result<()> {
 
 /// Background monitor task
 pub async fn run_monitor_task(mut monitor: FirmwareMonitor, interval_secs: u64) {
-    info!("Starting firmware crash monitor (interval: {}s)", interval_secs);
+    info!(
+        "Starting firmware crash monitor (interval: {}s)",
+        interval_secs
+    );
 
     loop {
         let health = monitor.poll().await;
@@ -292,12 +322,16 @@ pub async fn run_monitor_task(mut monitor: FirmwareMonitor, interval_secs: u64) 
                 debug!("Firmware healthy");
             }
             FirmwareHealth::Degraded => {
-                warn!("Firmware degraded: crash_suppress={}, hardfault={}",
-                    monitor.crash_suppress, monitor.hardfault);
+                warn!(
+                    "Firmware degraded: crash_suppress={}, hardfault={}",
+                    monitor.crash_suppress, monitor.hardfault
+                );
             }
             FirmwareHealth::Critical => {
-                warn!("Firmware critical! crash_suppress={}, hardfault={}",
-                    monitor.crash_suppress, monitor.hardfault);
+                warn!(
+                    "Firmware critical! crash_suppress={}, hardfault={}",
+                    monitor.crash_suppress, monitor.hardfault
+                );
                 // Could trigger healing here
             }
             FirmwareHealth::Unknown => {

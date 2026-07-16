@@ -83,16 +83,6 @@ impl HealingState {
     }
 }
 
-/// Healing action
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HealingAction {
-    None,
-    RestartAo,
-    PowerCycleGpio,
-    EnterSafeMode,
-    EnableUsbLifeline,
-}
-
 /// Main healer
 pub struct Healer {
     state: HealingState,
@@ -121,6 +111,17 @@ impl Healer {
         self.state.crash_window.push_back(now);
         self.state.consecutive_crashes += 1;
         self.prune_crash_window(now);
+
+        // Escalate the crash-counting layers once the threshold is first
+        // reached. Using an exact comparison avoids racing through every
+        // layer as further crashes accumulate in the same window.
+        if matches!(
+            self.state.active_layer,
+            HealingLayer::FwWatchdog | HealingLayer::CrashLoop
+        ) && self.crashes_in_window(now) == self.config.crash_threshold
+        {
+            self.escalate();
+        }
     }
 
     /// Record alive heartbeat
@@ -172,7 +173,8 @@ impl Healer {
             }
 
             HealingLayer::AoBackoff => {
-                let max_backoff = Self::ao_backoff_max_duration(self.config.max_ao_backoff_attempts);
+                let max_backoff =
+                    Self::ao_backoff_max_duration(self.config.max_ao_backoff_attempts);
                 if self.time_in_current_layer() > max_backoff {
                     self.escalate();
                     HealingAction::PowerCycleGpio
@@ -256,7 +258,9 @@ impl Healer {
 
     fn crashes_in_window(&self, now: Instant) -> u32 {
         let window = Duration::from_secs(self.config.crash_window_seconds);
-        self.state.crash_window.iter()
+        self.state
+            .crash_window
+            .iter()
             .filter(|&&t| now - t <= window)
             .count() as u32
     }
@@ -316,9 +320,18 @@ mod tests {
 
     #[test]
     fn test_healing_layer_next() {
-        assert_eq!(HealingLayer::FwWatchdog.next(), Some(HealingLayer::CrashLoop));
-        assert_eq!(HealingLayer::CrashLoop.next(), Some(HealingLayer::AoBackoff));
-        assert_eq!(HealingLayer::AoBackoff.next(), Some(HealingLayer::GpioCycle));
+        assert_eq!(
+            HealingLayer::FwWatchdog.next(),
+            Some(HealingLayer::CrashLoop)
+        );
+        assert_eq!(
+            HealingLayer::CrashLoop.next(),
+            Some(HealingLayer::AoBackoff)
+        );
+        assert_eq!(
+            HealingLayer::AoBackoff.next(),
+            Some(HealingLayer::GpioCycle)
+        );
         assert_eq!(HealingLayer::GpioCycle.next(), Some(HealingLayer::GiveUp));
         assert_eq!(HealingLayer::GiveUp.next(), Some(HealingLayer::UsbLifeline));
         assert_eq!(HealingLayer::UsbLifeline.next(), None);
@@ -406,7 +419,7 @@ mod tests {
 
     #[test]
     fn test_layer_timing() {
-        let mut healer = Healer::new();
+        let healer = Healer::new();
         let t1 = healer.time_in_current_layer();
         sleep(Duration::from_millis(10));
         let t2 = healer.time_in_current_layer();

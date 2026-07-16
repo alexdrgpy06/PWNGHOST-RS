@@ -1,6 +1,9 @@
 //! RL Agent implementation
 
-use crate::{features::Features, policy::{HeuristicPolicy, Policy, RlAction}};
+use crate::{
+    features::Features,
+    policy::{HeuristicPolicy, Policy, RlAction},
+};
 
 pub struct RlAgent {
     policy: Box<dyn Policy + Send>,
@@ -115,6 +118,13 @@ mod tests {
         let features = Features::new();
         // With empty features, heuristic should return a HopChannel
         let action = agent.select_action(&features);
-        assert!(matches!(action, RlAction::HopChannel(_) | RlAction::Deauth | RlAction::Associate | RlAction::Wait | RlAction::Sleep(_)));
+        assert!(matches!(
+            action,
+            RlAction::HopChannel(_)
+                | RlAction::Deauth
+                | RlAction::Associate
+                | RlAction::Wait
+                | RlAction::Sleep(_)
+        ));
     }
 }

@@ -1,12 +1,8 @@
 //! Epoch tracking for the agent
 
-use anyhow::Result;
 use chrono::{DateTime, Utc};
-use pwncore::{AccessPoint, AgentMode, Channel, Mood, Station, Peer};
+use pwncore::{AccessPoint, AgentMode, Channel, Mood, Peer};
 use std::collections::VecDeque;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{debug, info};
 
 /// Current epoch state
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -25,6 +21,10 @@ pub struct EpochState {
     pub blind_epochs: u64,
     pub total_handshakes: u64,
     pub total_epochs: u64,
+    pub aps_seen: usize,
+    pub clients_seen: usize,
+    pub did_deauth: bool,
+    pub did_associate: bool,
 }
 
 impl EpochState {
@@ -45,6 +45,10 @@ impl EpochState {
             blind_epochs: 0,
             total_handshakes: 0,
             total_epochs: 0,
+            aps_seen: 0,
+            clients_seen: 0,
+            did_deauth: false,
+            did_associate: false,
         }
     }
 
@@ -61,7 +65,11 @@ impl EpochState {
         self.timestamp = Utc::now();
         self.started_at = Utc::now();
         self.ended_at = None;
-        self.blind_epochs = if self.aps_found == 0 { self.blind_epochs + 1 } else { 0 };
+        self.blind_epochs = if self.aps_found == 0 {
+            self.blind_epochs + 1
+        } else {
+            0
+        };
     }
 
     /// Finalize current epoch
@@ -84,9 +92,9 @@ impl EpochState {
         self.assoc_attempts += 1;
     }
 
-    /// Track channel hop
-    pub fn track_hop(&mut self, new_channel: Channel) {
-        self.channel = new_channel;
+    /// Track a channel hop (channel itself is updated by the agent).
+    pub fn track_hop(&mut self) {
+        self.mode = AgentMode::Hop;
     }
 
     /// Duration of current epoch
@@ -95,7 +103,7 @@ impl EpochState {
     }
 
     /// Update observation from current APs
-    pub fn observe(&mut self, aps: &[AccessPoint], peers: &[Peer]) {
+    pub fn observe(&mut self, aps: &[AccessPoint], _peers: &[Peer]) {
         self.aps_found = aps.len();
     }
 }
@@ -121,12 +129,22 @@ impl EpochTracker {
     /// Advance to next epoch
     pub fn advance(&mut self, new_channel: Channel) {
         self.current.finalize();
+
+        // Carry the blind-epoch streak forward: increment when the epoch we
+        // just finished saw no APs, otherwise reset to zero.
+        let was_blind = self.current.aps_found == 0;
+        let prev_blind = self.current.blind_epochs;
+
         self.history.push_back(self.current.clone());
         if self.history.len() > self.max_history {
             self.history.pop_front();
         }
         self.total_epochs += 1;
-        self.current = EpochState::new(self.total_epochs, new_channel);
+
+        let mut next = EpochState::new(self.total_epochs, new_channel);
+        next.blind_epochs = if was_blind { prev_blind + 1 } else { 0 };
+        next.total_epochs = self.total_epochs;
+        self.current = next;
     }
 
     /// Finalize current epoch

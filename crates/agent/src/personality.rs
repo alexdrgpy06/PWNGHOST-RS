@@ -1,12 +1,9 @@
 //! Personality configuration and behavior
 
-use anyhow::Result;
+use crate::epoch::EpochState;
 use chrono::{DateTime, Utc};
-use pwncore::{AccessPoint, Channel, Mood, Station, Peer};
+use pwncore::{AgentMode, Mood, Peer};
 use std::collections::HashMap;
-use std::path::Path;
-use std::time::Duration;
-use tracing::{debug, info};
 
 /// Personality configuration
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -75,6 +72,60 @@ pub struct FaceConfig {
     pub png: bool,
 }
 
+impl From<config::PersonalityConfig> for PersonalityConfig {
+    fn from(c: config::PersonalityConfig) -> Self {
+        let f = c.faces;
+        Self {
+            bored_num_epochs: c.bored_num_epochs,
+            sad_num_epochs: c.sad_num_epochs,
+            angry_num_epochs: c.angry_num_epochs,
+            lonely_num_epochs: c.lonely_num_epochs,
+            bond_encounters_factor: c.bond_encounters_factor,
+            max_interactions: c.max_interactions,
+            throttle: c.throttle,
+            reward_handshake: c.reward_handshake,
+            reward_new_ap: c.reward_new_ap,
+            reward_association: c.reward_association,
+            penalty_missed: c.penalty_missed,
+            penalty_reboot: c.penalty_reboot,
+            min_recon_time: c.min_recon_time,
+            max_recon_time: c.max_recon_time,
+            hop_recon_time: c.hop_recon_time,
+            deauth: c.deauth,
+            associate: c.associate,
+            min_rssi: c.min_rssi,
+            position_x: c.position_x,
+            position_y: c.position_y,
+            frame_padding: c.frame_padding,
+            frame_padding_min_bytes: c.frame_padding_min_bytes,
+            faces: FaceConfig {
+                look_r: f.look_r,
+                look_l: f.look_l,
+                look_r_happy: f.look_r_happy,
+                look_l_happy: f.look_l_happy,
+                sleep: f.sleep,
+                awake: f.awake,
+                bored: f.bored,
+                intense: f.intense,
+                cool: f.cool,
+                happy: f.happy,
+                excited: f.excited,
+                grateful: f.grateful,
+                motivated: f.motivated,
+                demotivated: f.demotivated,
+                smart: f.smart,
+                lonely: f.lonely,
+                sad: f.sad,
+                angry: f.angry,
+                friend: f.friend,
+                broken: f.broken,
+                upload: f.upload,
+                png: f.png,
+            },
+        }
+    }
+}
+
 impl Default for PersonalityConfig {
     fn default() -> Self {
         Self {
@@ -112,23 +163,60 @@ impl Default for FaceConfig {
             look_l: vec!["(☉_☉ )".to_string()],
             look_r_happy: vec!["( ◕‿◕)".to_string(), "( ≧◡≦)".to_string()],
             look_l_happy: vec!["(◕‿◕ )".to_string(), "(≧◡≦ )".to_string()],
-            sleep: vec!["(⇀‿‿↼)".to_string(), "(≖‿‿≖)".to_string(), "(－_－)".to_string()],
+            sleep: vec![
+                "(⇀‿‿↼)".to_string(),
+                "(≖‿‿≖)".to_string(),
+                "(－_－)".to_string(),
+            ],
             awake: vec!["(◕‿‿◕)".to_string()],
             bored: vec!["(-__-)".to_string(), "(—__—)".to_string()],
             intense: vec!["(°▃▃°)".to_string(), "(°ロ°)".to_string()],
             cool: vec!["(⌐■_■)".to_string(), "(单__单)".to_string()],
-            happy: vec!["(•‿‿•)".to_string(), "(^‿‿^)".to_string(), "(^◡◡^)".to_string()],
+            happy: vec![
+                "(•‿‿•)".to_string(),
+                "(^‿‿^)".to_string(),
+                "(^◡◡^)".to_string(),
+            ],
             excited: vec!["(ᵔ◡◡ᵔ)".to_string(), "(✜‿‿✜)".to_string()],
             grateful: vec!["(^‿‿^)".to_string()],
-            motivated: vec!["(☼‿‿☼)".to_string(), "(★‿★)".to_string(), "(•̀ᴗ•́)".to_string()],
-            demotivated: vec!["(≖__≖)".to_string(), "(￣ヘ￣)".to_string(), "(¬_¬)".to_string()],
+            motivated: vec![
+                "(☼‿‿☼)".to_string(),
+                "(★‿★)".to_string(),
+                "(•̀ᴗ•́)".to_string(),
+            ],
+            demotivated: vec![
+                "(≖__≖)".to_string(),
+                "(￣ヘ￣)".to_string(),
+                "(¬_¬)".to_string(),
+            ],
             smart: vec!["(✜‿‿✜)".to_string()],
-            lonely: vec!["(ب__ب)".to_string(), "(｡•́︿•̀｡)".to_string(), "(︶︹︺)".to_string()],
-            sad: vec!["(╥☁╥ )".to_string(), "(╥﹏╥)".to_string(), "(ಥ﹏ಥ)".to_string()],
-            angry: vec!["(-_-')".to_string(), "(⇀__⇀)".to_string(), "(`___´)".to_string()],
-            friend: vec!["(♥‿‿♥)".to_string(), "(♡‿‿♡)".to_string(), "(♥‿♥ )".to_string(), "(♥ω♥ )".to_string()],
+            lonely: vec![
+                "(ب__ب)".to_string(),
+                "(｡•́︿•̀｡)".to_string(),
+                "(︶︹︺)".to_string(),
+            ],
+            sad: vec![
+                "(╥☁╥ )".to_string(),
+                "(╥﹏╥)".to_string(),
+                "(ಥ﹏ಥ)".to_string(),
+            ],
+            angry: vec![
+                "(-_-')".to_string(),
+                "(⇀__⇀)".to_string(),
+                "(`___´)".to_string(),
+            ],
+            friend: vec![
+                "(♥‿‿♥)".to_string(),
+                "(♡‿‿♡)".to_string(),
+                "(♥‿♥ )".to_string(),
+                "(♥ω♥ )".to_string(),
+            ],
             broken: vec!["(☓‿‿☓)".to_string()],
-            upload: vec!["(1__0)".to_string(), "(1__1)".to_string(), "(0__1)".to_string()],
+            upload: vec![
+                "(1__0)".to_string(),
+                "(1__1)".to_string(),
+                "(0__1)".to_string(),
+            ],
             png: false,
         }
     }
@@ -169,7 +257,13 @@ impl Personality {
         self.handshakes += 1;
         self.xp += self.config.reward_handshake as u32;
         self.last_handshake = Some(Utc::now());
+        *self.encounters.entry(ap_bssid).or_insert(0) += 1;
         self.check_level_up();
+    }
+
+    /// Number of times a handshake was captured from a given AP.
+    pub fn encounters_for(&self, ap_bssid: &[u8; 6]) -> u32 {
+        self.encounters.get(ap_bssid).copied().unwrap_or(0)
     }
 
     /// Update on new AP seen
@@ -211,7 +305,7 @@ impl Personality {
             if epoch.handshakes_this_epoch > 1 {
                 return Mood::Excited;
             }
-            if self.handshakes == epoch.handshakes_this_epoch as u32 {
+            if self.handshakes == epoch.handshakes_this_epoch {
                 return Mood::Grateful; // First ever handshake
             }
             return Mood::Happy;
@@ -356,37 +450,10 @@ impl Default for Personality {
     }
 }
 
-impl Mood {
-    pub fn random_face(&self) -> &'static str {
-        match self {
-            Mood::LookR => "( ⚆_⚆)",
-            Mood::LookL => "(☉_☉ )",
-            Mood::LookRHappy => "( ◕‿◕)",
-            Mood::LookLHappy => "(◕‿◕ )",
-            Mood::Sleep => "(⇀‿‿↼)",
-            Mood::Awake => "(◕‿‿◕)",
-            Mood::Bored => "(-__-)",
-            Mood::Intense => "(°▃▃°)",
-            Mood::Cool => "(⌐■_■)",
-            Mood::Happy => "(•‿‿•)",
-            Mood::Excited => "(ᵔ◡◡ᵔ)",
-            Mood::Grateful => "(^‿‿^)",
-            Mood::Motivated => "(☼‿‿☼)",
-            Mood::Demotivated => "(≖__≖)",
-            Mood::Smart => "(✜‿‿✜)",
-            Mood::Lonely => "(ب__ب)",
-            Mood::Sad => "(╥☁╥ )",
-            Mood::Angry => "(-_-')",
-            Mood::Friend => "(♥‿‿♥)",
-            Mood::Broken => "(☓‿‿☓)",
-            Mood::Upload => "(1__0)",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pwncore::Channel;
 
     #[test]
     fn test_personality_new() {
@@ -417,7 +484,7 @@ mod tests {
     fn test_mood_computation() {
         let p = Personality::default();
         let epoch = EpochState::new(1, Channel::new(1).unwrap());
-        
+
         // No APs, no peers -> LookR (Recon)
         assert_eq!(p.compute_mood(&epoch, &[]), Mood::LookR);
     }

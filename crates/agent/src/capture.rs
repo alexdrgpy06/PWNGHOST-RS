@@ -2,13 +2,13 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use pwncore::{AccessPoint, Channel, Handshake, HandshakeType, MacAddr};
+use pwncore::{AccessPoint, Channel, Handshake};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Capture manager for handshake files
 pub struct CaptureManager {
@@ -21,7 +21,7 @@ impl CaptureManager {
     pub fn new(staging: PathBuf, final_dir: PathBuf) -> Self {
         Self {
             staging_dir: staging,
-            final_dir: final_dir,
+            final_dir,
             seen_files: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -30,7 +30,10 @@ impl CaptureManager {
     pub async fn init(&self) -> Result<()> {
         fs::create_dir_all(&self.staging_dir).await?;
         fs::create_dir_all(&self.final_dir).await?;
-        info!("Capture manager initialized: staging={:?}, final={:?}", self.staging_dir, self.final_dir);
+        info!(
+            "Capture manager initialized: staging={:?}, final={:?}",
+            self.staging_dir, self.final_dir
+        );
         Ok(())
     }
 
@@ -46,9 +49,14 @@ impl CaptureManager {
         let mut entries = fs::read_dir(&self.staging_dir).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "pcapng") {
+            if path.extension().is_some_and(|e| e == "pcapng") {
                 let meta = entry.metadata().await?;
-                let modified = meta.modified().ok().and_then(|t| DateTime::<Utc>::from_timestamp(t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64, 0));
+                let modified = meta.modified().ok().and_then(|t| {
+                    DateTime::<Utc>::from_timestamp(
+                        t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64,
+                        0,
+                    )
+                });
 
                 if let Some(mod_time) = modified {
                     if !seen.contains_key(&path) || seen[&path] < mod_time {
@@ -75,12 +83,18 @@ impl CaptureManager {
         let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
         let ssid = ap.ssid.as_deref().unwrap_or("unknown");
         let safe_ssid: String = ssid.chars().filter(|c| c.is_alphanumeric()).collect();
-        let bssid_str = format!("{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}", 
-            ap.bssid.octets()[0], ap.bssid.octets()[1], ap.bssid.octets()[2],
-            ap.bssid.octets()[3], ap.bssid.octets()[4], ap.bssid.octets()[5]);
+        let bssid_str = format!(
+            "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            ap.bssid.octets()[0],
+            ap.bssid.octets()[1],
+            ap.bssid.octets()[2],
+            ap.bssid.octets()[3],
+            ap.bssid.octets()[4],
+            ap.bssid.octets()[5]
+        );
 
         let base_name = format!("{}_{}_{}", safe_ssid, bssid_str, timestamp);
-        
+
         let final_pcapng = self.final_dir.join(format!("{}.pcapng", base_name));
         let final_hashcat = self.final_dir.join(format!("{}.22000", base_name));
 
@@ -104,10 +118,7 @@ impl CaptureManager {
             if self.validate_capture(&pcapng).await? {
                 // In real implementation, would parse AP info from pcapng
                 // For now, create placeholder
-                let handshake = Handshake::new(
-                    [0; 6].into(),
-                    Channel::new(1).unwrap(),
-                );
+                let handshake = Handshake::new([0; 6].into(), Channel::new(1).unwrap());
                 handshakes.push(handshake);
 
                 // Move to final

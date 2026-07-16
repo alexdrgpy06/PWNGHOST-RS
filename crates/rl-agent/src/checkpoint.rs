@@ -1,8 +1,7 @@
 //! Model checkpoint management
 
+use crate::model::ActorCritic;
 use anyhow::Result;
-use candle_core::{Device, Module, VarMap};
-use candle_nn::VarBuilder;
 use std::path::Path;
 use tracing::info;
 
@@ -23,19 +22,13 @@ impl CheckpointManager {
         })
     }
 
-    /// Save model checkpoint
-    pub fn save_checkpoint(
-        &self,
-        model: &dyn Module,
-        step: usize,
-        metrics: &std::collections::HashMap<String, f32>,
-    ) -> Result<()> {
+    /// Save a model checkpoint for a given training step.
+    pub fn save_checkpoint(&self, model: &ActorCritic, step: usize) -> Result<()> {
         let filename = format!("checkpoint_step_{}.safetensors", step);
         let path = self.model_dir.join(&filename);
 
-        // In real implementation, use candle's save mechanism
-        // For now, just create placeholder
         info!("Saving checkpoint to {:?}", path);
+        model.save(&path)?;
 
         // Clean old checkpoints
         self.cleanup_old_checkpoints()?;
@@ -43,13 +36,15 @@ impl CheckpointManager {
         Ok(())
     }
 
-    /// Load latest checkpoint
-    pub fn load_latest<M: Module>(&self, model: &mut M, device: &Device) -> Result<Option<usize>> {
+    /// Load the latest checkpoint into `model`, returning its step number.
+    pub fn load_latest(&self, model: &mut ActorCritic) -> Result<Option<usize>> {
         // Find latest checkpoint
         let mut entries: Vec<_> = std::fs::read_dir(&self.model_dir)?
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.file_name().to_string_lossy().starts_with("checkpoint_step_")
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("checkpoint_step_")
                     && e.file_name().to_string_lossy().ends_with(".safetensors")
             })
             .collect();
@@ -68,16 +63,13 @@ impl CheckpointManager {
         let step: usize = step_str.parse().unwrap_or(0);
 
         info!("Loading checkpoint from {:?}", path);
-
-        // In real implementation:
-        // let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[path], DType::F32, device)? };
-        // model.load(vb)?;
+        model.load(&path)?;
 
         Ok(Some(step))
     }
 
-    /// Load specific checkpoint
-    pub fn load_checkpoint<M: Module>(&self, step: usize, model: &mut M, device: &Device) -> Result<()> {
+    /// Load a specific checkpoint step into `model`.
+    pub fn load_checkpoint(&self, step: usize, model: &mut ActorCritic) -> Result<()> {
         let filename = format!("checkpoint_step_{}.safetensors", step);
         let path = self.model_dir.join(&filename);
 
@@ -86,8 +78,7 @@ impl CheckpointManager {
         }
 
         info!("Loading checkpoint step {}", step);
-        // let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[path], DType::F32, device)? };
-        // model.load(vb)?;
+        model.load(&path)?;
 
         Ok(())
     }
@@ -97,7 +88,9 @@ impl CheckpointManager {
         let mut entries: Vec<_> = std::fs::read_dir(&self.model_dir)?
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.file_name().to_string_lossy().starts_with("checkpoint_step_")
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("checkpoint_step_")
                     && e.file_name().to_string_lossy().ends_with(".safetensors")
             })
             .collect();
@@ -116,17 +109,21 @@ impl CheckpointManager {
     }
 
     /// Save model with metrics for best model tracking
-    pub fn save_best_model<M: Module>(
+    pub fn save_best_model(
         &self,
-        model: &M,
+        model: &ActorCritic,
         metric_name: &str,
         metric_value: f32,
     ) -> Result<()> {
-        let filename = format!("best_{}_{:.4}.safetensors", metric_name.replace('.', "_"), metric_value);
+        let filename = format!(
+            "best_{}_{:.4}.safetensors",
+            metric_name.replace('.', "_"),
+            metric_value
+        );
         let path = self.model_dir.join(&filename);
 
         info!("Saving best model for {}: {:.4}", metric_name, metric_value);
-        // model.save(&path)?;
+        model.save(&path)?;
 
         Ok(())
     }
@@ -140,7 +137,11 @@ impl CheckpointManager {
             let name = entry.file_name().to_string_lossy().to_string();
 
             if name.starts_with("checkpoint_step_") && name.ends_with(".safetensors") {
-                let step_str = name.strip_prefix("checkpoint_step_").unwrap().strip_suffix(".safetensors").unwrap();
+                let step_str = name
+                    .strip_prefix("checkpoint_step_")
+                    .unwrap()
+                    .strip_suffix(".safetensors")
+                    .unwrap();
                 if let Ok(step) = step_str.parse::<usize>() {
                     let metadata = entry.metadata()?;
                     checkpoints.push(CheckpointInfo {

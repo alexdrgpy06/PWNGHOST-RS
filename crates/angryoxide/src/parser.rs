@@ -3,6 +3,9 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// Alias used across the crate for the parsed AngryOxide event enum.
+pub type AoEvent = AngryOxideEvent;
+
 /// AngryOxide event types parsed from JSON lines
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -99,8 +102,8 @@ pub fn parse_json_line(line: &str) -> Result<AngryOxideEvent> {
     }
 
     // Try to parse as JSON
-    let value: serde_json::Value = serde_json::from_str(line)
-        .with_context(|| format!("Failed to parse JSON: {}", line))?;
+    let value: serde_json::Value =
+        serde_json::from_str(line).with_context(|| format!("Failed to parse JSON: {}", line))?;
 
     // Determine event type from structure
     if let Some(event_type) = value.get("type").and_then(|v| v.as_str()) {
@@ -120,38 +123,36 @@ pub fn parse_json_line(line: &str) -> Result<AngryOxideEvent> {
 }
 
 fn parse_ap_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let ap: ApEvent = serde_json::from_value(value)
-        .context("Failed to parse AP event")?;
+    let ap: ApEvent = serde_json::from_value(value).context("Failed to parse AP event")?;
     Ok(AngryOxideEvent::Ap(ap))
 }
 
 fn parse_client_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let client: ClientEvent = serde_json::from_value(value)
-        .context("Failed to parse client event")?;
+    let client: ClientEvent =
+        serde_json::from_value(value).context("Failed to parse client event")?;
     Ok(AngryOxideEvent::Client(client))
 }
 
 fn parse_handshake_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let hs: HandshakeEvent = serde_json::from_value(value)
-        .context("Failed to parse handshake event")?;
+    let hs: HandshakeEvent =
+        serde_json::from_value(value).context("Failed to parse handshake event")?;
     Ok(AngryOxideEvent::Handshake(hs))
 }
 
 fn parse_stats_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let stats: StatsEvent = serde_json::from_value(value)
-        .context("Failed to parse stats event")?;
+    let stats: StatsEvent = serde_json::from_value(value).context("Failed to parse stats event")?;
     Ok(AngryOxideEvent::Stats(stats))
 }
 
 fn parse_channel_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let ch: ChannelEvent = serde_json::from_value(value)
-        .context("Failed to parse channel event")?;
+    let ch: ChannelEvent =
+        serde_json::from_value(value).context("Failed to parse channel event")?;
     Ok(AngryOxideEvent::Channel(ch))
 }
 
 fn parse_status_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let status: StatusEvent = serde_json::from_value(value)
-        .context("Failed to parse status event")?;
+    let status: StatusEvent =
+        serde_json::from_value(value).context("Failed to parse status event")?;
     Ok(AngryOxideEvent::Status(status))
 }
 
@@ -255,12 +256,16 @@ pub fn ao_event_to_internal(event: AngryOxideEvent) -> Result<InternalEvent> {
             rssi: ap.rssi,
             encryption: parse_encryption(&ap.encryption),
             vendor: ap.vendor,
-            clients: ap.clients.into_iter().map(|c| ClientData {
-                mac: parse_mac(&c.mac).unwrap_or([0; 6]),
-                vendor: c.vendor,
-                rssi: c.rssi,
-                channel: c.channel,
-            }).collect(),
+            clients: ap
+                .clients
+                .into_iter()
+                .map(|c| ClientData {
+                    mac: parse_mac(&c.mac).unwrap_or([0; 6]),
+                    vendor: c.vendor,
+                    rssi: c.rssi,
+                    channel: c.channel,
+                })
+                .collect(),
             first_seen: ap.first_seen,
             last_seen: ap.last_seen,
         })),
@@ -303,8 +308,8 @@ fn parse_mac(s: &str) -> Result<[u8; 6]> {
     }
     let mut bytes = [0u8; 6];
     for (i, part) in parts.iter().enumerate() {
-        bytes[i] = u8::from_str_radix(part, 16)
-            .with_context(|| format!("Invalid MAC byte: {}", part))?;
+        bytes[i] =
+            u8::from_str_radix(part, 16).with_context(|| format!("Invalid MAC byte: {}", part))?;
     }
     Ok(bytes)
 }
@@ -373,7 +378,13 @@ mod tests {
     fn test_parse_mac() {
         let mac = parse_mac("aa:bb:cc:dd:ee:ff").unwrap();
         assert_eq!(mac, [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
-        assert_eq!(format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]), "aa:bb:cc:dd:ee:ff");
+        assert_eq!(
+            format!(
+                "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+            ),
+            "aa:bb:cc:dd:ee:ff"
+        );
     }
 
     #[test]

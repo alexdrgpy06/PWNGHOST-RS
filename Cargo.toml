@@ -10,6 +10,7 @@ members = [
     "crates/radio",
     "crates/ui/display",
     "crates/ui/web",
+    "crates/ui",
     "crates/pwnghost-rs",
 ]
 
@@ -38,7 +39,7 @@ zbus_xmlgen = "4.0"
 dbus = "0.9"
 libc = "0.2"
 rand = "0.8"
-mac-addr = "0.3"
+mac-addr = { version = "0.3", features = ["serde"] }
 proptest = "1.0"
 tempfile = "3.0"
 hex = "0.4"

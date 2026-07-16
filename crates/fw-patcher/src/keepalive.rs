@@ -2,9 +2,9 @@
 
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
 use tokio::process::Command;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Path where keepalive binary is installed
 pub const KEEPALIVE_BINARY_PATH: &str = "/usr/local/bin/wlan_keepalive";
@@ -207,6 +207,9 @@ mod tests {
 
     #[test]
     fn test_service_path() {
-        assert_eq!(KEEPALIVE_SERVICE_PATH, "/etc/systemd/system/wlan_keepalive.service");
+        assert_eq!(
+            KEEPALIVE_SERVICE_PATH,
+            "/etc/systemd/system/wlan_keepalive.service"
+        );
     }
 }

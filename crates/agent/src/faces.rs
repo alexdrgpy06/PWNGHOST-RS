@@ -4,7 +4,7 @@ use pwncore::Mood;
 
 /// Get a random face for the given mood
 pub fn face_for_mood(mood: Mood) -> &'static str {
-    let faces = match mood {
+    let faces: &[&'static str] = match mood {
         Mood::LookR => &["( ⚆_⚆)", "(☉_☉ )"],
         Mood::LookL => &["(☉_☉ )", "( ⚆_⚆)"],
         Mood::LookRHappy => &["( ◕‿◕)", "( ≧◡≦)"],

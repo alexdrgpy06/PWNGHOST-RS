@@ -8,10 +8,14 @@ description = "Main agent loop for PWNGHOST-RS"
 angryoxide = { path = "../angryoxide" }
 pwncore = { path = "../pwncore" }
 config = { path = "../config" }
+rl-agent = { path = "../rl-agent" }
+ui = { path = "../ui" }
+radio = { path = "../radio" }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 mlua = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 rand = { workspace = true }

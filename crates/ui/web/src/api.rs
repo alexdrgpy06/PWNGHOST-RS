@@ -1,7 +1,7 @@
 //! REST API endpoints for Web UI
 
-use axum::{Json, extract::State};
-use pwncore::{AccessPoint, SessionStats};
+use axum::{extract::State, Json};
+use pwncore::AccessPoint;
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -20,9 +20,7 @@ pub struct SessionResponse {
     pub peers: usize,
 }
 
-pub async fn get_session(
-    State(state): State<Arc<RwLock<AppState>>>,
-) -> Json<SessionResponse> {
+pub async fn get_session(State(state): State<Arc<RwLock<AppState>>>) -> Json<SessionResponse> {
     let state = state.read().await;
     Json(SessionResponse {
         epoch: state.epoch,
@@ -40,14 +38,12 @@ pub async fn get_session(
 
 #[derive(Serialize)]
 pub struct ConfigResponse {
-    pub main: crate::config::MainConfig,
-    pub personality: crate::config::PersonalityConfig,
-    pub ui: crate::config::UiConfig,
+    pub main: config::MainConfig,
+    pub personality: config::PersonalityConfig,
+    pub ui: config::UiConfig,
 }
 
-pub async fn get_config(
-    State(state): State<Arc<RwLock<AppState>>>,
-) -> Json<ConfigResponse> {
+pub async fn get_config(State(state): State<Arc<RwLock<AppState>>>) -> Json<ConfigResponse> {
     let state = state.read().await;
     Json(ConfigResponse {
         main: state.config.main.clone(),
@@ -58,7 +54,7 @@ pub async fn get_config(
 
 pub async fn update_config(
     State(state): State<Arc<RwLock<AppState>>>,
-    Json(config): Json<crate::config::PwnConfig>,
+    Json(config): Json<config::PwnConfig>,
 ) -> Json<serde_json::Value> {
     let mut state = state.write().await;
     state.config = config;
@@ -76,18 +72,22 @@ pub struct PeerResponse {
     pub last_seen: i64,
 }
 
-pub async fn get_peers(
-    State(state): State<Arc<RwLock<AppState>>>,
-) -> Json<Vec<PeerResponse>> {
+pub async fn get_peers(State(state): State<Arc<RwLock<AppState>>>) -> Json<Vec<PeerResponse>> {
     let state = state.read().await;
-    Json(state.peers.iter().map(|p| PeerResponse {
-        mac: p.mac.to_string(),
-        name: p.name.clone(),
-        channel: p.channel,
-        mood: format!("{:?}", p.mood),
-        level: p.level,
-        last_seen: p.last_seen.timestamp(),
-    }).collect())
+    Json(
+        state
+            .peers
+            .iter()
+            .map(|p| PeerResponse {
+                mac: p.mac.to_string(),
+                name: p.name.clone(),
+                channel: p.channel,
+                mood: format!("{:?}", p.mood),
+                level: p.level,
+                last_seen: p.last_seen.timestamp(),
+            })
+            .collect(),
+    )
 }
 
 #[derive(Serialize)]
@@ -105,15 +105,21 @@ pub async fn get_handshakes(
     State(state): State<Arc<RwLock<AppState>>>,
 ) -> Json<Vec<HandshakeResponse>> {
     let state = state.read().await;
-    Json(state.handshakes.iter().map(|h| HandshakeResponse {
-        id: h.id.to_string(),
-        bssid: h.bssid.to_string(),
-        ssid: h.ssid.clone(),
-        channel: h.channel.value(),
-        handshake_type: format!("{:?}", h.handshake_type),
-        captured_at: h.captured_at.timestamp(),
-        file: h.pcapng_path.clone(),
-    }).collect())
+    Json(
+        state
+            .handshakes_list
+            .iter()
+            .map(|h| HandshakeResponse {
+                id: h.id.to_string(),
+                bssid: h.bssid.to_string(),
+                ssid: h.ssid.clone(),
+                channel: h.channel.value(),
+                handshake_type: format!("{:?}", h.handshake_type),
+                captured_at: h.captured_at.timestamp(),
+                file: h.pcapng_path.clone(),
+            })
+            .collect(),
+    )
 }
 
 #[derive(Serialize)]
@@ -135,9 +141,7 @@ pub struct StatusResponse {
     pub charging: bool,
 }
 
-pub async fn get_status(
-    State(state): State<Arc<RwLock<AppState>>>,
-) -> Json<StatusResponse> {
+pub async fn get_status(State(state): State<Arc<RwLock<AppState>>>) -> Json<StatusResponse> {
     let state = state.read().await;
     Json(StatusResponse {
         uptime: state.uptime,
@@ -170,13 +174,14 @@ pub struct AppState {
     pub level: u32,
     pub xp: u32,
     pub peers: Vec<pwncore::Peer>,
-    pub handshakes_list: Vec<crate::pwncore::Handshake>,
-    pub config: crate::config::PwnConfig,
+    pub handshakes_list: Vec<pwncore::Handshake>,
+    pub config: config::PwnConfig,
     pub cpu_temp: Option<f32>,
     pub ram_used: u64,
     pub ram_total: u64,
     pub battery: Option<u8>,
     pub charging: bool,
+    pub ws_manager: Arc<crate::ws::WebSocketManager>,
 }
 
 impl Default for AppState {
@@ -193,12 +198,13 @@ impl Default for AppState {
             xp: 0,
             peers: Vec::new(),
             handshakes_list: Vec::new(),
-            config: crate::config::PwnConfig::default(),
+            config: config::PwnConfig::default(),
             cpu_temp: None,
             ram_used: 0,
             ram_total: 0,
             battery: None,
             charging: false,
+            ws_manager: Arc::new(crate::ws::WebSocketManager::new()),
         }
     }
 }

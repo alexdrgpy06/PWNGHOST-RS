@@ -1,7 +1,6 @@
 //! Policy trait and implementations
 
 use crate::features::Features;
-use anyhow::Result;
 
 /// Policy trait for action selection
 pub trait Policy: Send + Sync {
@@ -15,15 +14,15 @@ pub trait Policy: Send + Sync {
 /// RL actions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RlAction {
-    HopChannel(u8),      // 1-13
-    Deauth,              // Send deauth
-    Associate,           // Send association
-    Wait,                // Wait on current channel
-    Sleep(u8),           // Sleep for N seconds
+    HopChannel(u8), // 1-13
+    Deauth,         // Send deauth
+    Associate,      // Send association
+    Wait,           // Wait on current channel
+    Sleep(u8),      // Sleep for N seconds
 }
 
 impl RlAction {
-    pub fn from_index(idx: usize, action_dim: usize) -> Self {
+    pub fn from_index(idx: usize, _action_dim: usize) -> Self {
         match idx {
             0..=12 => RlAction::HopChannel((idx + 1) as u8),
             13 => RlAction::Deauth,
@@ -82,6 +81,30 @@ impl Policy for HeuristicPolicy {
     }
 }
 
+/// Neural policy backed by a trained actor-critic network.
+pub struct ModelPolicy {
+    model: crate::model::ActorCritic,
+}
+
+impl ModelPolicy {
+    pub fn new(model: crate::model::ActorCritic) -> Self {
+        Self { model }
+    }
+}
+
+impl Policy for ModelPolicy {
+    fn select_action(&self, features: &Features) -> RlAction {
+        match self.model.act(&features.as_flat()) {
+            Ok((action, _value)) => action,
+            Err(_) => RlAction::Wait,
+        }
+    }
+
+    fn action_space(&self) -> u8 {
+        self.model.config().action_dim as u8
+    }
+}
+
 /// Random policy for exploration
 pub struct RandomPolicy;
 
@@ -99,12 +122,6 @@ impl Policy for RandomPolicy {
 
     fn action_space(&self) -> u8 {
         16
-    }
-}
-
-impl Default for HeuristicPolicy {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -129,7 +146,10 @@ mod tests {
         features.ap_histogram[5] = 1.0; // Channel 6
 
         let action = policy.select_action(&features);
-        assert!(matches!(action, RlAction::HopChannel(_) | RlAction::Deauth | RlAction::Associate | RlAction::Wait));
+        assert!(matches!(
+            action,
+            RlAction::HopChannel(_) | RlAction::Deauth | RlAction::Associate | RlAction::Wait
+        ));
     }
 
     #[test]
@@ -137,6 +157,9 @@ mod tests {
         let policy = RandomPolicy;
         let features = crate::features::Features::new();
         let action = policy.select_action(&features);
-        assert!(matches!(action, RlAction::HopChannel(_) | RlAction::Deauth | RlAction::Associate | RlAction::Wait));
+        assert!(matches!(
+            action,
+            RlAction::HopChannel(_) | RlAction::Deauth | RlAction::Associate | RlAction::Wait
+        ));
     }
 }

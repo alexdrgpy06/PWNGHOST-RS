@@ -1,7 +1,6 @@
 //! Configuration schema for PWNGHOST-RS
 
 use anyhow::Result;
-use figment::{providers::Serialized, Figment};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,6 +24,9 @@ pub struct PwnConfig {
     pub fs: FsConfig,
 
     #[serde(default)]
+    pub oxigotchi: OxigotchiConfig,
+
+    #[serde(default)]
     pub plugins: HashMap<String, PluginConfig>,
 }
 
@@ -36,7 +38,28 @@ impl Default for PwnConfig {
             ui: UiConfig::default(),
             bettercap: BettercapConfig::default(),
             fs: FsConfig::default(),
+            oxigotchi: OxigotchiConfig::default(),
             plugins: default_plugins(),
+        }
+    }
+}
+
+/// Runtime/loop tuning for the agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OxigotchiConfig {
+    /// Duration of one agent epoch, in seconds.
+    #[serde(default = "default_epoch_duration")]
+    pub epoch_duration: u64,
+}
+
+fn default_epoch_duration() -> u64 {
+    15
+}
+
+impl Default for OxigotchiConfig {
+    fn default() -> Self {
+        Self {
+            epoch_duration: default_epoch_duration(),
         }
     }
 }
@@ -91,7 +114,13 @@ fn default_plugins() -> HashMap<String, PluginConfig> {
         "wigle",
         "wpa_sec",
     ] {
-        plugins.insert(name.to_string(), PluginConfig { enabled: true, options: HashMap::new() });
+        plugins.insert(
+            name.to_string(),
+            PluginConfig {
+                enabled: true,
+                options: HashMap::new(),
+            },
+        );
     }
     plugins
 }
@@ -139,14 +168,30 @@ pub struct MainConfig {
     pub log: LogConfig,
 }
 
-fn default_name() -> String { "pwnghost".to_string() }
-fn default_lang() -> String { "en".to_string() }
-fn default_iface() -> String { "wlan0".to_string() }
-fn default_mon_start_cmd() -> String { "/usr/bin/monstart".to_string() }
-fn default_mon_stop_cmd() -> String { "/usr/bin/monstop".to_string() }
-fn default_max_blind_epochs() -> u32 { 5 }
-fn default_confd() -> String { "/etc/pwnghost/conf.d/".to_string() }
-fn default_custom_plugins() -> String { "/usr/local/share/pwnghost/custom-plugins/".to_string() }
+fn default_name() -> String {
+    "pwnghost".to_string()
+}
+fn default_lang() -> String {
+    "en".to_string()
+}
+fn default_iface() -> String {
+    "wlan0".to_string()
+}
+fn default_mon_start_cmd() -> String {
+    "/usr/bin/monstart".to_string()
+}
+fn default_mon_stop_cmd() -> String {
+    "/usr/bin/monstop".to_string()
+}
+fn default_max_blind_epochs() -> u32 {
+    5
+}
+fn default_confd() -> String {
+    "/etc/pwnghost/conf.d/".to_string()
+}
+fn default_custom_plugins() -> String {
+    "/usr/local/share/pwnghost/custom-plugins/".to_string()
+}
 
 impl Default for MainConfig {
     fn default() -> Self {
@@ -169,10 +214,18 @@ impl Default for MainConfig {
 }
 
 impl MainConfig {
-    pub fn handshakes_dir(&self) -> PathBuf { PathBuf::from("/etc/pwnghost/handshakes") }
-    pub fn log_dir(&self) -> PathBuf { PathBuf::from("/etc/pwnghost/log") }
-    pub fn backup_dir(&self) -> PathBuf { PathBuf::from("/etc/pwnghost/backups") }
-    pub fn sessions_dir(&self) -> PathBuf { PathBuf::from("/etc/pwnghost/sessions") }
+    pub fn handshakes_dir(&self) -> PathBuf {
+        PathBuf::from("/etc/pwnghost/handshakes")
+    }
+    pub fn log_dir(&self) -> PathBuf {
+        PathBuf::from("/etc/pwnghost/log")
+    }
+    pub fn backup_dir(&self) -> PathBuf {
+        PathBuf::from("/etc/pwnghost/backups")
+    }
+    pub fn sessions_dir(&self) -> PathBuf {
+        PathBuf::from("/etc/pwnghost/sessions")
+    }
 }
 
 /// Plugin configuration
@@ -185,7 +238,9 @@ pub struct PluginConfig {
     pub options: HashMap<String, serde_json::Value>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Logging configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,8 +255,12 @@ pub struct LogConfig {
     pub rotation: LogRotationConfig,
 }
 
-fn default_log_path() -> String { "/etc/pwnghost/log/pwnghost.log".to_string() }
-fn default_log_debug_path() -> String { "/etc/pwnghost/log/pwnghost-debug.log".to_string() }
+fn default_log_path() -> String {
+    "/etc/pwnghost/log/pwnghost.log".to_string()
+}
+fn default_log_debug_path() -> String {
+    "/etc/pwnghost/log/pwnghost-debug.log".to_string()
+}
 
 impl Default for LogConfig {
     fn default() -> Self {
@@ -223,7 +282,9 @@ pub struct LogRotationConfig {
     pub size: String,
 }
 
-fn default_log_size() -> String { "10M".to_string() }
+fn default_log_size() -> String {
+    "10M".to_string()
+}
 
 impl Default for LogRotationConfig {
     fn default() -> Self {
@@ -314,24 +375,60 @@ pub struct PersonalityConfig {
     pub faces: FaceConfig,
 }
 
-fn default_bored_epochs() -> u64 { 50 }
-fn default_sad_epochs() -> u64 { 100 }
-fn default_angry_epochs() -> u64 { 200 }
-fn default_lonely_epochs() -> u64 { 150 }
-fn default_bond_factor() -> f32 { 1.0 }
-fn default_max_interactions() -> u32 { 10 }
-fn default_throttle() -> u32 { 30 }
-fn default_reward_handshake() -> i32 { 100 }
-fn default_reward_new_ap() -> i32 { 10 }
-fn default_reward_assoc() -> i32 { 5 }
-fn default_penalty_missed() -> i32 { -10 }
-fn default_penalty_reboot() -> i32 { -50 }
-fn default_min_recon() -> u64 { 5 }
-fn default_max_recon() -> u64 { 30 }
-fn default_hop_recon() -> u64 { 10 }
-fn default_min_rssi() -> i16 { -80 }
-fn default_frame_padding() -> bool { true }
-fn default_frame_padding_min() -> usize { 650 }
+fn default_bored_epochs() -> u64 {
+    50
+}
+fn default_sad_epochs() -> u64 {
+    100
+}
+fn default_angry_epochs() -> u64 {
+    200
+}
+fn default_lonely_epochs() -> u64 {
+    150
+}
+fn default_bond_factor() -> f32 {
+    1.0
+}
+fn default_max_interactions() -> u32 {
+    10
+}
+fn default_throttle() -> u32 {
+    30
+}
+fn default_reward_handshake() -> i32 {
+    100
+}
+fn default_reward_new_ap() -> i32 {
+    10
+}
+fn default_reward_assoc() -> i32 {
+    5
+}
+fn default_penalty_missed() -> i32 {
+    -10
+}
+fn default_penalty_reboot() -> i32 {
+    -50
+}
+fn default_min_recon() -> u64 {
+    5
+}
+fn default_max_recon() -> u64 {
+    30
+}
+fn default_hop_recon() -> u64 {
+    10
+}
+fn default_min_rssi() -> i16 {
+    -80
+}
+fn default_frame_padding() -> bool {
+    true
+}
+fn default_frame_padding_min() -> usize {
+    650
+}
 
 impl Default for PersonalityConfig {
     fn default() -> Self {
@@ -375,7 +472,7 @@ impl PersonalityConfig {
     }
 
     /// Calculate recon time based on epoch state
-    pub fn calc_recon_time(&self, epoch: &crate::EpochState) -> u64 {
+    pub fn calc_recon_time(&self, epoch: &pwncore::EpochState) -> u64 {
         let base = self.min_recon_time;
         let max = self.max_recon_time;
         let ap_bonus = (epoch.aps_found as u64 * 2).min(10);
@@ -383,7 +480,7 @@ impl PersonalityConfig {
     }
 
     /// Calculate hop time based on epoch state
-    pub fn calc_hop_time(&self, epoch: &crate::EpochState) -> u64 {
+    pub fn calc_hop_time(&self, epoch: &pwncore::EpochState) -> u64 {
         let base = self.hop_recon_time;
         if epoch.aps_found == 0 {
             return base / 2;
@@ -396,36 +493,123 @@ impl PersonalityConfig {
     }
 }
 
-/// Face configuration
+/// Face configuration - kaomoji strings per mood (matches pwnagotchi personality.toml)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FaceConfig {
     #[serde(default)]
+    pub look_r: Vec<String>,
+    #[serde(default)]
+    pub look_l: Vec<String>,
+    #[serde(default)]
+    pub look_r_happy: Vec<String>,
+    #[serde(default)]
+    pub look_l_happy: Vec<String>,
+    #[serde(default)]
+    pub sleep: Vec<String>,
+    #[serde(default)]
+    pub awake: Vec<String>,
+    #[serde(default)]
+    pub bored: Vec<String>,
+    #[serde(default)]
+    pub intense: Vec<String>,
+    #[serde(default)]
+    pub cool: Vec<String>,
+    #[serde(default)]
+    pub happy: Vec<String>,
+    #[serde(default)]
+    pub excited: Vec<String>,
+    #[serde(default)]
+    pub grateful: Vec<String>,
+    #[serde(default)]
+    pub motivated: Vec<String>,
+    #[serde(default)]
+    pub demotivated: Vec<String>,
+    #[serde(default)]
+    pub smart: Vec<String>,
+    #[serde(default)]
+    pub lonely: Vec<String>,
+    #[serde(default)]
+    pub sad: Vec<String>,
+    #[serde(default)]
+    pub angry: Vec<String>,
+    #[serde(default)]
+    pub friend: Vec<String>,
+    #[serde(default)]
+    pub broken: Vec<String>,
+    #[serde(default)]
+    pub upload: Vec<String>,
+    #[serde(default)]
     pub png: bool,
-
-    #[serde(default)]
-    pub position_x: i32,
-
-    #[serde(default)]
-    pub position_y: i32,
-
-    // Face image paths (populated at runtime)
-    #[serde(skip)]
-    pub face_paths: HashMap<String, String>,
 }
 
 impl Default for FaceConfig {
     fn default() -> Self {
         Self {
+            look_r: vec!["( ⚆_⚆)".to_string()],
+            look_l: vec!["(☉_☉ )".to_string()],
+            look_r_happy: vec!["( ◕‿◕)".to_string(), "( ≧◡≦)".to_string()],
+            look_l_happy: vec!["(◕‿◕ )".to_string(), "(≧◡≦ )".to_string()],
+            sleep: vec![
+                "(⇀‿‿↼)".to_string(),
+                "(≖‿‿≖)".to_string(),
+                "(－_－)".to_string(),
+            ],
+            awake: vec!["(◕‿‿◕)".to_string()],
+            bored: vec!["(-__-)".to_string(), "(—__—)".to_string()],
+            intense: vec!["(°▃▃°)".to_string(), "(°ロ°)".to_string()],
+            cool: vec!["(⌐■_■)".to_string(), "(单__单)".to_string()],
+            happy: vec![
+                "(•‿‿•)".to_string(),
+                "(^‿‿^)".to_string(),
+                "(^◡◡^)".to_string(),
+            ],
+            excited: vec!["(ᵔ◡◡ᵔ)".to_string(), "(✜‿‿✜)".to_string()],
+            grateful: vec!["(^‿‿^)".to_string()],
+            motivated: vec![
+                "(☼‿‿☼)".to_string(),
+                "(★‿★)".to_string(),
+                "(•̀ᴗ•́)".to_string(),
+            ],
+            demotivated: vec![
+                "(≖__≖)".to_string(),
+                "(￣ヘ￣)".to_string(),
+                "(¬､¬)".to_string(),
+            ],
+            smart: vec!["(✜‿‿✜)".to_string()],
+            lonely: vec![
+                "(ب__ب)".to_string(),
+                "(｡•́︿•̀｡)".to_string(),
+                "(︶︹︺)".to_string(),
+            ],
+            sad: vec![
+                "(╥☁╥ )".to_string(),
+                "(╥﹏╥)".to_string(),
+                "(ಥ﹏ಥ)".to_string(),
+            ],
+            angry: vec![
+                "(-_-')".to_string(),
+                "(⇀__⇀)".to_string(),
+                "(`___´)".to_string(),
+            ],
+            friend: vec![
+                "(♥‿‿♥)".to_string(),
+                "(♡‿‿♡)".to_string(),
+                "(♥‿♥ )".to_string(),
+                "(♥ω♥ )".to_string(),
+            ],
+            broken: vec!["(☓‿‿☓)".to_string()],
+            upload: vec![
+                "(1__0)".to_string(),
+                "(1__1)".to_string(),
+                "(0__1)".to_string(),
+            ],
             png: false,
-            position_x: 0,
-            position_y: 16,
-            face_paths: HashMap::new(),
         }
     }
 }
 
 /// UI configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UiConfig {
     #[serde(default)]
     pub web: WebUiConfig,
@@ -435,16 +619,6 @@ pub struct UiConfig {
 
     #[serde(default)]
     pub faces: FacesConfig,
-}
-
-impl Default for UiConfig {
-    fn default() -> Self {
-        Self {
-            web: WebUiConfig::default(),
-            display: DisplayUiConfig::default(),
-            faces: FacesConfig::default(),
-        }
-    }
 }
 
 impl UiConfig {
@@ -486,10 +660,18 @@ pub struct WebUiConfig {
     pub theme: WebThemeConfig,
 }
 
-fn default_web_address() -> String { "0.0.0.0".to_string() }
-fn default_web_user() -> String { "changeme".to_string() }
-fn default_web_pass() -> String { "changeme".to_string() }
-fn default_web_port() -> u16 { 8080 }
+fn default_web_address() -> String {
+    "0.0.0.0".to_string()
+}
+fn default_web_user() -> String {
+    "changeme".to_string()
+}
+fn default_web_pass() -> String {
+    "changeme".to_string()
+}
+fn default_web_port() -> u16 {
+    8080
+}
 
 impl Default for WebUiConfig {
     fn default() -> Self {
@@ -529,9 +711,15 @@ pub struct WebThemeConfig {
     pub accent_b: u8,
 }
 
-fn default_accent_r() -> u8 { 76 }
-fn default_accent_g() -> u8 { 175 }
-fn default_accent_b() -> u8 { 80 }
+fn default_accent_r() -> u8 {
+    76
+}
+fn default_accent_g() -> u8 {
+    175
+}
+fn default_accent_b() -> u8 {
+    80
+}
 
 impl Default for WebThemeConfig {
     fn default() -> Self {
@@ -556,8 +744,12 @@ pub struct DisplayUiConfig {
     pub display_type: String,
 }
 
-fn default_rotation() -> u16 { 180 }
-fn default_display_type() -> String { "waveshare_v4".to_string() }
+fn default_rotation() -> u16 {
+    180
+}
+fn default_display_type() -> String {
+    "waveshare_v4".to_string()
+}
 
 impl Default for DisplayUiConfig {
     fn default() -> Self {
@@ -615,8 +807,10 @@ pub struct BettercapConfig {
     pub silence: Vec<String>,
 }
 
-fn default_handshakes_path() -> String { "/etc/pwnghost/handshakes".to_string() }
-fn default_silence() -> Vec<String> {
+fn default_handshakes_path() -> String {
+    "/etc/pwnghost/handshakes".to_string()
+}
+pub fn default_silence() -> Vec<String> {
     vec![
         "ble.device.new".to_string(),
         "ble.device.lost".to_string(),
@@ -656,22 +850,28 @@ pub struct FsConfig {
 impl Default for FsConfig {
     fn default() -> Self {
         let mut mounts = HashMap::new();
-        mounts.insert("log".to_string(), FsMountConfig {
-            enabled: true,
-            mount: "/etc/pwnghost/log/".to_string(),
-            size: "50M".to_string(),
-            sync: 60,
-            zram: true,
-            rsync: true,
-        });
-        mounts.insert("data".to_string(), FsMountConfig {
-            enabled: true,
-            mount: "/var/tmp/pwnghost".to_string(),
-            size: "10M".to_string(),
-            sync: 3600,
-            zram: true,
-            rsync: true,
-        });
+        mounts.insert(
+            "log".to_string(),
+            FsMountConfig {
+                enabled: true,
+                mount: "/etc/pwnghost/log/".to_string(),
+                size: "50M".to_string(),
+                sync: 60,
+                zram: true,
+                rsync: true,
+            },
+        );
+        mounts.insert(
+            "data".to_string(),
+            FsMountConfig {
+                enabled: true,
+                mount: "/var/tmp/pwnghost".to_string(),
+                size: "10M".to_string(),
+                sync: 3600,
+                zram: true,
+                rsync: true,
+            },
+        );
         Self {
             enabled: true,
             mounts,
@@ -699,7 +899,9 @@ pub struct FsMountConfig {
     pub rsync: bool,
 }
 
-fn default_sync() -> u32 { 60 }
+fn default_sync() -> u32 {
+    60
+}
 
 #[cfg(test)]
 mod tests {
@@ -718,15 +920,15 @@ mod tests {
     #[test]
     fn test_calc_recon_time() {
         let p = PersonalityConfig::default();
-        let epoch = crate::EpochState {
+        let epoch = pwncore::EpochState {
             epoch: 1,
-            channel: crate::Channel::new(1).unwrap(),
-            mode: crate::AgentMode::Recon,
+            channel: pwncore::Channel::new(1).unwrap(),
+            mode: pwncore::AgentMode::Recon,
             aps_found: 5,
             handshakes_this_epoch: 0,
             deauths_sent: 0,
             assoc_attempts: 0,
-            mood: crate::Mood::LookR,
+            mood: pwncore::Mood::LookR,
             timestamp: chrono::Utc::now(),
             started_at: chrono::Utc::now(),
             ended_at: None,

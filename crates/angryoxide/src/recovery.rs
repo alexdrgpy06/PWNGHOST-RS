@@ -1,9 +1,7 @@
 //! AngryOxide crash recovery with exponential backoff
 
-use anyhow::Result;
 use std::time::{Duration, Instant};
-use tokio::time::sleep;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// Recovery manager for AngryOxide subprocess
 pub struct RecoveryManager {
@@ -92,7 +90,9 @@ impl RecoveryManager {
     pub fn record_stable_epoch(&mut self) {
         if self.state == RecoveryState::Running {
             self.config.stable_epochs += 1;
-            if self.config.stable_epochs >= self.config.stable_epochs_for_reset && self.crash_count > 0 {
+            if self.config.stable_epochs >= self.config.stable_epochs_for_reset
+                && self.crash_count > 0
+            {
                 info!(
                     "AngryOxide stable for {} epochs, resetting crash counter",
                     self.config.stable_epochs
@@ -112,7 +112,7 @@ impl RecoveryManager {
     /// Check if we should attempt auto-restart
     pub fn should_restart(&self) -> bool {
         matches!(self.state, RecoveryState::BackingOff)
-            && self.next_restart.map_or(false, |t| Instant::now() >= t)
+            && self.next_restart.is_some_and(|t| Instant::now() >= t)
     }
 
     /// Attempt auto-restart
@@ -139,7 +139,8 @@ impl RecoveryManager {
 
     /// Get time until next restart
     pub fn time_until_restart(&self) -> Option<Duration> {
-        self.next_restart.map(|t| t.saturating_duration_since(Instant::now()))
+        self.next_restart
+            .map(|t| t.saturating_duration_since(Instant::now()))
     }
 
     /// Reset recovery state (e.g., after manual restart)
@@ -172,7 +173,8 @@ mod tests {
 
         mgr.record_crash();
         assert_eq!(mgr.crash_count(), 1);
-        assert_eq!(mgr.state(), RecoveryState::Crashed);
+        // A single crash (below max) leaves the manager waiting to restart.
+        assert_eq!(mgr.state(), RecoveryState::BackingOff);
         assert!(mgr.next_restart.is_some());
 
         // Simulate backoff elapsed

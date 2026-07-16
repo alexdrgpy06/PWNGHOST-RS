@@ -11,11 +11,12 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
-use crate::args::{AngryOxideConfig, build_args};
-use crate::parser::{AoEvent, parse_json_line};
+use crate::args::{build_args, AngryOxideConfig};
+use crate::parser::{parse_json_line, AoEvent};
 use crate::recovery::RecoveryManager;
 
 /// Handle to a running AngryOxide process
+#[allow(dead_code)]
 pub struct AngryOxideHandle {
     child: Arc<Mutex<Option<tokio::process::Child>>>,
     event_tx: mpsc::UnboundedSender<AoEvent>,
@@ -38,7 +39,9 @@ impl AngryOxideHandle {
     pub async fn is_running(&self) -> bool {
         let mut child = self.child.lock().await;
         if let Some(ref mut c) = *child {
-            c.try_wait().unwrap_or(Some(std::process::ExitStatus::default())).is_none()
+            c.try_wait()
+                .unwrap_or(Some(std::process::ExitStatus::default()))
+                .is_none()
         } else {
             false
         }
@@ -93,17 +96,16 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let mut child = cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .with_context(|| format!("Failed to spawn AngryOxide: {}", binary))?;
 
     let pid = child.id().unwrap_or(0);
     info!("AngryOxide started with PID {}", pid);
 
     // Take stdout and stderr
-    let stdout = child.stdout.take()
-        .context("Failed to take stdout")?;
-    let stderr = child.stderr.take()
-        .context("Failed to take stderr")?;
+    let stdout = child.stdout.take().context("Failed to take stdout")?;
+    let stderr = child.stderr.take().context("Failed to take stderr")?;
 
     // Event channel
     let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -115,9 +117,9 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
 
     // Spawn stdout reader
     let event_tx_stdout = event_tx.clone();
-    let recovery_stdout = recovery.clone();
+    let _recovery_stdout = recovery.clone();
     let shutdown_stdout = shutdown_flag.clone();
-    let child_stdout = child.clone();
+    let _child_stdout = child.clone();
 
     tokio::spawn(async move {
         let reader = BufReader::new(stdout);
@@ -163,7 +165,7 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
     let child_crash = child.clone();
     let recovery_crash = recovery.clone();
     let shutdown_crash = shutdown_flag.clone();
-    let pid_crash = pid;
+    let _pid_crash = pid;
 
     tokio::spawn(async move {
         loop {
@@ -204,7 +206,7 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
     let config_restart = config.clone();
     let child_restart = child.clone();
     let shutdown_restart = shutdown_flag.clone();
-    let event_tx_restart = event_tx.clone();
+    let _event_tx_restart = event_tx.clone();
 
     tokio::spawn(async move {
         loop {
@@ -214,30 +216,30 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
 
             sleep(Duration::from_secs(1)).await;
 
-            if recovery_restart.lock().await.should_restart() {
-                if recovery_restart.lock().await.try_auto_restart().await {
-                    info!("Attempting to restart AngryOxide...");
-                    let args = build_args(&config_restart).unwrap();
+            if recovery_restart.lock().await.should_restart()
+                && recovery_restart.lock().await.try_auto_restart().await
+            {
+                info!("Attempting to restart AngryOxide...");
+                let args = build_args(&config_restart).unwrap();
 
-                    let mut cmd = Command::new(&config_restart.binary);
-                    cmd.args(&args)
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .kill_on_drop(true);
+                let mut cmd = Command::new(&config_restart.binary);
+                cmd.args(&args)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true);
 
-                    match cmd.spawn() {
-                        Ok(new_child) => {
-                            let new_pid = new_child.id().unwrap_or(0);
-                            info!("AngryOxide restarted with PID {}", new_pid);
+                match cmd.spawn() {
+                    Ok(new_child) => {
+                        let new_pid = new_child.id().unwrap_or(0);
+                        info!("AngryOxide restarted with PID {}", new_pid);
 
-                            *child_restart.lock().await = Some(new_child);
-                            // Note: In a full implementation, you'd also need to
-                            // re-setup stdout/stderr readers and event channel
-                        }
-                        Err(e) => {
-                            error!("Failed to restart AngryOxide: {}", e);
-                            recovery_restart.lock().await.record_crash();
-                        }
+                        *child_restart.lock().await = Some(new_child);
+                        // Note: In a full implementation, you'd also need to
+                        // re-setup stdout/stderr readers and event channel
+                    }
+                    Err(e) => {
+                        error!("Failed to restart AngryOxide: {}", e);
+                        recovery_restart.lock().await.record_crash();
                     }
                 }
             }
@@ -258,8 +260,6 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_spawn_structure() {
         // Verify module structure compiles

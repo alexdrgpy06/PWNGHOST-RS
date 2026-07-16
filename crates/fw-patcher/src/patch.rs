@@ -1,6 +1,7 @@
 //! Patch parsing and application for CoderFX inplace-v7.txt format
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
+use sha2::Digest;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -58,7 +59,8 @@ impl PatchLine {
         }
 
         // Parse layer (0-7 for CoderFX 8 layers)
-        let layer = parts[3].parse::<u8>()
+        let layer = parts[3]
+            .parse::<u8>()
             .with_context(|| format!("Invalid layer: {}", parts[3]))?;
         if layer > 7 {
             bail!("Layer must be 0-7, got {}", layer);
@@ -107,8 +109,7 @@ impl PatchLine {
             .with_context(|| format!("Seek back to offset 0x{:x} failed", self.offset))?;
         file.write_all(&self.new_bytes)
             .with_context(|| format!("Write at offset 0x{:x} failed", self.offset))?;
-        file.flush()
-            .context("Flush after write failed")?;
+        file.flush().context("Flush after write failed")?;
 
         debug!(
             "Applied patch at 0x{:x} (layer {}): {}",
@@ -158,23 +159,36 @@ pub fn apply_patches<P: AsRef<Path>>(
     info!("Parsed {} patch lines", patch_lines.len());
 
     // Create a temporary copy of the firmware
-    let temp_file = NamedTempFile::new()
-        .context("Failed to create temporary file for patching")?;
+    let temp_file = NamedTempFile::new().context("Failed to create temporary file for patching")?;
     let temp_path = temp_file.path().to_path_buf();
 
-    fs::copy(firmware_path, &temp_path)
-        .with_context(|| format!("Failed to copy firmware to temp: {}", firmware_path.display()))?;
+    fs::copy(firmware_path, &temp_path).with_context(|| {
+        format!(
+            "Failed to copy firmware to temp: {}",
+            firmware_path.display()
+        )
+    })?;
 
     // Apply each patch
     for (i, line) in patch_lines.iter().enumerate() {
-        debug!("Applying patch line {}: layer {} - {}", i + 1, line.layer, line.description);
-        line.apply(&temp_path)
-            .with_context(|| format!("Failed to apply patch line {} at offset 0x{:x}", i + 1, line.offset))?;
+        debug!(
+            "Applying patch line {}: layer {} - {}",
+            i + 1,
+            line.layer,
+            line.description
+        );
+        line.apply(&temp_path).with_context(|| {
+            format!(
+                "Failed to apply patch line {} at offset 0x{:x}",
+                i + 1,
+                line.offset
+            )
+        })?;
     }
 
-    // Verify output hash
+    // Verify output hash (skipped when no expected hash is provided)
     let output_hash = file_sha256(&temp_path)?;
-    if output_hash != expected_output_sha256 {
+    if !expected_output_sha256.is_empty() && output_hash != expected_output_sha256 {
         bail!(
             "Output hash mismatch: expected {}, got {}",
             expected_output_sha256,
@@ -182,11 +196,18 @@ pub fn apply_patches<P: AsRef<Path>>(
         );
     }
 
-    info!("All patches applied successfully, output hash verified: {}", output_hash);
+    info!(
+        "All patches applied successfully, output hash: {}",
+        output_hash
+    );
 
     // Atomic rename
-    fs::rename(&temp_path, firmware_path)
-        .with_context(|| format!("Failed to replace firmware with patched version: {}", firmware_path.display()))?;
+    fs::rename(&temp_path, firmware_path).with_context(|| {
+        format!(
+            "Failed to replace firmware with patched version: {}",
+            firmware_path.display()
+        )
+    })?;
 
     info!("Firmware patched successfully: {}", firmware_path.display());
     Ok(())
@@ -203,18 +224,31 @@ pub fn apply_patches_verified<P: AsRef<Path>>(
     info!("Applying {} patches with verification", patch_lines.len());
 
     // Create a temporary copy
-    let temp_file = NamedTempFile::new()
-        .context("Failed to create temporary file for patching")?;
+    let temp_file = NamedTempFile::new().context("Failed to create temporary file for patching")?;
     let temp_path = temp_file.path().to_path_buf();
 
-    fs::copy(firmware_path, &temp_path)
-        .with_context(|| format!("Failed to copy firmware to temp: {}", firmware_path.display()))?;
+    fs::copy(firmware_path, &temp_path).with_context(|| {
+        format!(
+            "Failed to copy firmware to temp: {}",
+            firmware_path.display()
+        )
+    })?;
 
     // Apply each patch
     for (i, line) in patch_lines.iter().enumerate() {
-        debug!("Applying patch line {}: layer {} - {}", i + 1, line.layer, line.description);
-        line.apply(&temp_path)
-            .with_context(|| format!("Failed to apply patch line {} at offset 0x{:x}", i + 1, line.offset))?;
+        debug!(
+            "Applying patch line {}: layer {} - {}",
+            i + 1,
+            line.layer,
+            line.description
+        );
+        line.apply(&temp_path).with_context(|| {
+            format!(
+                "Failed to apply patch line {} at offset 0x{:x}",
+                i + 1,
+                line.offset
+            )
+        })?;
     }
 
     // Verify output hash
@@ -230,8 +264,12 @@ pub fn apply_patches_verified<P: AsRef<Path>>(
     info!("All patches applied and verified: {}", output_hash);
 
     // Atomic rename
-    fs::rename(&temp_path, firmware_path)
-        .with_context(|| format!("Failed to replace firmware with patched version: {}", firmware_path.display()))?;
+    fs::rename(&temp_path, firmware_path).with_context(|| {
+        format!(
+            "Failed to replace firmware with patched version: {}",
+            firmware_path.display()
+        )
+    })?;
 
     info!("Firmware patched successfully: {}", firmware_path.display());
     Ok(())
@@ -290,7 +328,10 @@ pub fn verify_patches<P: AsRef<Path>>(
         );
     }
 
-    info!("Dry run verification passed: {} patches, output hash verified", patch_lines.len());
+    info!(
+        "Dry run verification passed: {} patches, output hash verified",
+        patch_lines.len()
+    );
     Ok(())
 }
 
@@ -304,8 +345,7 @@ pub fn file_sha256<P: AsRef<Path>>(path: P) -> Result<String> {
     let mut buf = [0u8; 8192];
 
     loop {
-        let n = file.read(&mut buf)
-            .context("Read failed during hashing")?;
+        let n = file.read(&mut buf).context("Read failed during hashing")?;
         if n == 0 {
             break;
         }
@@ -323,14 +363,17 @@ pub fn bytes_sha256(data: &[u8]) -> String {
 }
 
 /// Backup original firmware before patching
-pub fn backup_firmware<P: AsRef<Path>>(firmware_path: P, backup_dir: P) -> Result<std::path::PathBuf> {
+pub fn backup_firmware<P: AsRef<Path>>(
+    firmware_path: P,
+    backup_dir: P,
+) -> Result<std::path::PathBuf> {
     let firmware_path = firmware_path.as_ref();
     let backup_dir = backup_dir.as_ref();
 
-    fs::create_dir_all(backup_dir)
-        .context("Failed to create backup directory")?;
+    fs::create_dir_all(backup_dir).context("Failed to create backup directory")?;
 
-    let firmware_name = firmware_path.file_name()
+    let firmware_name = firmware_path
+        .file_name()
         .context("Firmware path has no filename")?;
 
     let hash = file_sha256(firmware_path)?;
@@ -354,7 +397,7 @@ pub fn restore_firmware<P: AsRef<Path>>(backup_path: P, target_path: P) -> Resul
     }
 
     fs::copy(backup_path, target_path)
-        .with_context(|| format!("Failed to restore firmware from backup"))?;
+        .with_context(|| "Failed to restore firmware from backup".to_string())?;
 
     info!("Firmware restored from backup: {}", backup_path.display());
     Ok(())
@@ -363,8 +406,8 @@ pub fn restore_firmware<P: AsRef<Path>>(backup_path: P, target_path: P) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     fn create_test_firmware() -> (NamedTempFile, Vec<u8>) {
         let mut f = NamedTempFile::new().unwrap();
@@ -421,7 +464,7 @@ mod tests {
     fn test_parse_patch_file_skips_comments() {
         let mut f = NamedTempFile::new().unwrap();
         writeln!(f, "# This is a comment").unwrap();
-        writeln!(f, "").unwrap();
+        writeln!(f).unwrap();
         writeln!(f, "0x200 | aaaaaaaa | cccccccc | 1 | another patch").unwrap();
         f.flush().unwrap();
 

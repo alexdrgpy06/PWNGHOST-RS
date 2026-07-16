@@ -1,7 +1,6 @@
 //! BCM43436B0 patchram loader for Bluetooth firmware
 
 use anyhow::Result;
-use std::process::Command;
 use tokio::process::Command as AsyncCommand;
 use tracing::{info, warn};
 
@@ -19,18 +18,21 @@ pub async fn load_patchram(chip: &str) -> Result<()> {
     };
 
     // Check if firmware exists
-    if !tokio::fs::metadata(firmware).await.is_ok() {
+    if tokio::fs::metadata(firmware).await.is_err() {
         warn!("Firmware not found at {}, trying alternative", firmware);
     }
 
     // Run patchram
     let status = AsyncCommand::new(&patchram_bin)
         .args([
-            "--patchram", firmware,
+            "--patchram",
+            firmware,
             "--enable_hci",
             "--no2bytes",
-            "--tosleep", "1000",
-            "--baudrate", "3000000",
+            "--tosleep",
+            "1000",
+            "--baudrate",
+            "3000000",
             "/dev/ttyAMA0", // UART device for Pi Zero 2W
         ])
         .status()
@@ -76,7 +78,6 @@ async fn find_patchram_binary() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_patchram_module_structure() {

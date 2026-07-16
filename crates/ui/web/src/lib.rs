@@ -4,54 +4,47 @@ pub mod api;
 pub mod server;
 pub mod ws;
 
-pub use server::{create_router, serve, AppState};
+pub use api::AppState;
+pub use server::{create_router, serve};
+pub use ws::{LiveUpdate, WebSocketManager};
 
-use axum::{
-    Router,
-    routing::get,
-    extract::State,
-    response::Html,
-};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::info;
 
-/// Web server state
-#[derive(Clone)]
-pub struct WebState {
-    // Web-specific state
+/// Web server configuration.
+#[derive(Debug, Clone, Default)]
+pub struct WebConfig {
+    /// Optional directory of static assets to serve under `/static`.
+    pub static_dir: Option<String>,
 }
 
-impl Default for WebState {
-    fn default() -> Self {
-        Self {}
+/// High-level web server handle wrapping the shared [`AppState`].
+pub struct WebServer {
+    state: Arc<RwLock<AppState>>,
+}
+
+impl WebServer {
+    /// Create a new web server with default state.
+    pub fn new(_config: WebConfig) -> Self {
+        Self {
+            state: Arc::new(RwLock::new(AppState::default())),
+        }
     }
-}
 
-/// Create web routes
-pub fn web_routes() -> Router<Arc<RwLock<WebState>>> {
-    Router::new()
-        .route("/", get(index_handler))
-        .route("/health", get(health_handler))
-}
+    /// Access the shared application state (for pushing live updates).
+    pub fn state(&self) -> Arc<RwLock<AppState>> {
+        self.state.clone()
+    }
 
-/// Index page handler
-async fn index_handler() -> Html<String> {
-    Html(include_str!("../templates/index.html"))
-}
-
-/// Health check
-async fn health_handler() -> Html<String> {
-    Html("OK".to_string())
-}
-
-/// Start web server
-pub async fn start_server(addr: &str, state: Arc<RwLock<WebState>>) -> anyhow::Result<()> {
-    let app = web_routes().with_state(state);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    info!("Web server listening on {}", addr);
-    axum::serve(listener, app).await?;
-    Ok(())
+    /// Bind and serve the web UI on `addr` until the process exits.
+    pub async fn serve(self, addr: SocketAddr) -> anyhow::Result<()> {
+        let app = create_router(self.state);
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        tracing::info!("Web server listening on {}", addr);
+        axum::serve(listener, app).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -59,8 +52,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_web_routes() {
-        let state = Arc::new(RwLock::new(WebState::default()));
-        let _router = web_routes().with_state(state);
+    fn test_web_server_new() {
+        let server = WebServer::new(WebConfig::default());
+        let _state = server.state();
     }
 }

@@ -1,17 +1,11 @@
 //! Radio mode manager for PWNGHOST-RS (RAGE/BT/SAFE)
 
 pub mod bluetooth;
-pub mod manager;
 pub mod patchram;
 pub mod safe;
 pub mod wifi;
 
-pub use manager::{RadioManager, RadioMode, RadioState};
-
 use anyhow::Result;
-use std::time::Duration;
-use tokio::time::sleep;
-use tracing::{info, warn};
 
 /// Three mutually exclusive radio modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -35,6 +29,8 @@ pub struct RadioManager {
     mode: RadioMode,
     state: RadioState,
     interface: String,
+    /// When true, hardware bring-up/teardown is skipped (for tests / dry runs).
+    mock: bool,
 }
 
 impl RadioManager {
@@ -43,6 +39,17 @@ impl RadioManager {
             mode: RadioMode::Rage,
             state: RadioState::Idle,
             interface,
+            mock: false,
+        }
+    }
+
+    /// Create a manager that never touches real hardware (state machine only).
+    pub fn mock(interface: String) -> Self {
+        Self {
+            mode: RadioMode::Rage,
+            state: RadioState::Idle,
+            interface,
+            mock: true,
         }
     }
 
@@ -55,7 +62,9 @@ impl RadioManager {
         wifi_ssid: Option<&str>,
         wifi_pass: Option<&str>,
     ) -> Result<RadioMode> {
-        if self.state == RadioState::Active(mode) || (self.state != RadioState::Idle && self.mode == mode) {
+        if self.state == RadioState::Active(mode)
+            || (self.state != RadioState::Idle && self.mode == mode)
+        {
             return Ok(self.mode);
         }
 
@@ -68,44 +77,52 @@ impl RadioManager {
         self.mode = mode;
 
         // Teardown current mode
-        teardown_all(&self.interface).await;
+        if !self.mock {
+            teardown_all(&self.interface).await;
+        }
 
         match mode {
             RadioMode::Rage => {
-                if let Err(e) = bringup_rage(&self.interface).await {
-                    self.state = RadioState::Failed {
-                        mode,
-                        error: format!("Failed to bring up RAGE mode: {}", e),
-                    };
-                    return Err(anyhow::anyhow!("Failed to bring up RAGE mode: {}", e));
+                if !self.mock {
+                    if let Err(e) = bringup_rage(&self.interface).await {
+                        self.state = RadioState::Failed {
+                            mode,
+                            error: format!("Failed to bring up RAGE mode: {}", e),
+                        };
+                        return Err(anyhow::anyhow!("Failed to bring up RAGE mode: {}", e));
+                    }
                 }
             }
             RadioMode::Bt => {
-                let address = bt_address
-                    .ok_or_else(|| anyhow::anyhow!("BT address required for Bt mode"))?;
-                let chip = bt_chip
-                    .ok_or_else(|| anyhow::anyhow!("BT chip required for Bt mode"))?;
-                if let Err(e) = bringup_bt(address, chip).await {
-                    teardown_rage(&self.interface).await;
-                    self.state = RadioState::Failed {
-                        mode,
-                        error: format!("Failed to bring up BT mode: {}", e),
-                    };
-                    return Err(anyhow::anyhow!("Failed to bring up BT mode: {}", e));
+                let address =
+                    bt_address.ok_or_else(|| anyhow::anyhow!("BT address required for Bt mode"))?;
+                let chip =
+                    bt_chip.ok_or_else(|| anyhow::anyhow!("BT chip required for Bt mode"))?;
+                if !self.mock {
+                    if let Err(e) = bringup_bt(address, chip).await {
+                        teardown_rage(&self.interface).await;
+                        self.state = RadioState::Failed {
+                            mode,
+                            error: format!("Failed to bring up BT mode: {}", e),
+                        };
+                        return Err(anyhow::anyhow!("Failed to bring up BT mode: {}", e));
+                    }
                 }
             }
             RadioMode::Safe => {
-                let ssid = wifi_ssid
-                    .ok_or_else(|| anyhow::anyhow!("SSID required for Safe mode"))?;
-                let pass = wifi_pass
-                    .ok_or_else(|| anyhow::anyhow!("Password required for Safe mode"))?;
-                if let Err(e) = bringup_safe(&self.interface, ssid, pass).await {
-                    teardown_rage(&self.interface).await;
-                    self.state = RadioState::Failed {
-                        mode,
-                        error: format!("Failed to bring up SAFE mode: {}", e),
-                    };
-                    return Err(anyhow::anyhow!("Failed to bring up SAFE mode: {}", e));
+                let ssid =
+                    wifi_ssid.ok_or_else(|| anyhow::anyhow!("SSID required for Safe mode"))?;
+                let pass =
+                    wifi_pass.ok_or_else(|| anyhow::anyhow!("Password required for Safe mode"))?;
+                if !self.mock {
+                    if let Err(e) = bringup_safe(&self.interface, ssid, pass).await {
+                        teardown_rage(&self.interface).await;
+                        self.state = RadioState::Failed {
+                            mode,
+                            error: format!("Failed to bring up SAFE mode: {}", e),
+                        };
+                        return Err(anyhow::anyhow!("Failed to bring up SAFE mode: {}", e));
+                    }
                 }
             }
         }
@@ -131,7 +148,9 @@ impl RadioManager {
     }
 
     pub async fn reset(&mut self) {
-        teardown_all(&self.interface).await;
+        if !self.mock {
+            teardown_all(&self.interface).await;
+        }
         self.mode = RadioMode::Rage;
         self.state = RadioState::Idle;
     }
@@ -177,118 +196,130 @@ mod tests {
 
     #[test]
     fn test_radio_manager_new() {
-        let mgr = RadioManager::new("wlan0".to_string());
+        let mgr = RadioManager::mock("wlan0".to_string());
         assert_eq!(mgr.state, RadioState::Idle);
         assert_eq!(mgr.interface, "wlan0");
         assert_eq!(mgr.mode, RadioMode::Rage);
     }
 
-    #[test]
-    fn test_switch_to_rage() {
-        let mut mgr = RadioManager::new("wlan0".to_string());
+    #[tokio::test]
+    async fn test_switch_to_rage() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
         let result = mgr.switch_to(RadioMode::Rage, None, None, None, None).await;
         assert!(result.is_ok());
         assert_eq!(mgr.state, RadioState::Active(RadioMode::Rage));
         assert_eq!(result.unwrap(), RadioMode::Rage);
     }
 
-    #[test]
-    fn test_switch_to_rage_idempotent() {
-        let mut mgr = RadioManager::new("wlan0".to_string());
+    #[tokio::test]
+    async fn test_switch_to_rage_idempotent() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
         let _ = mgr.switch_to(RadioMode::Rage, None, None, None, None).await;
         let result = mgr.switch_to(RadioMode::Rage, None, None, None, None).await;
         assert!(result.is_ok());
         assert_eq!(mgr.state, RadioState::Active(RadioMode::Rage));
     }
 
-    #[test]
-    fn test_switch_rage_to_bt() {
-        let mut mgr = RadioManager::new("wlan0".to_string());
+    #[tokio::test]
+    async fn test_switch_rage_to_bt() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
         let _ = mgr.switch_to(RadioMode::Rage, None, None, None, None).await;
-        let result = mgr.switch_to(
-            RadioMode::Bt,
-            Some("00:11:22:33:44:55"),
-            Some("bcm43436b0"),
-            None,
-            None,
-        ).await;
+        let result = mgr
+            .switch_to(
+                RadioMode::Bt,
+                Some("00:11:22:33:44:55"),
+                Some("bcm43436b0"),
+                None,
+                None,
+            )
+            .await;
         assert!(result.is_ok());
         assert_eq!(mgr.state, RadioState::Active(RadioMode::Bt));
         assert_eq!(result.unwrap(), RadioMode::Bt);
     }
 
-    #[test]
-    fn test_switch_bt_to_safe() {
-        let mut mgr = RadioManager::new("wlan0".to_string());
-        let _ = mgr.switch_to(
-            RadioMode::Bt,
-            Some("00:11:22:33:44:55"),
-            Some("bcm43436b0"),
-            None,
-            None,
-        ).await;
-        let result = mgr.switch_to(
-            RadioMode::Safe,
-            None,
-            None,
-            Some("MyWiFi"),
-            Some("password123"),
-        ).await;
+    #[tokio::test]
+    async fn test_switch_bt_to_safe() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
+        let _ = mgr
+            .switch_to(
+                RadioMode::Bt,
+                Some("00:11:22:33:44:55"),
+                Some("bcm43436b0"),
+                None,
+                None,
+            )
+            .await;
+        let result = mgr
+            .switch_to(
+                RadioMode::Safe,
+                None,
+                None,
+                Some("MyWiFi"),
+                Some("password123"),
+            )
+            .await;
         assert!(result.is_ok());
         assert_eq!(mgr.state, RadioState::Active(RadioMode::Safe));
         assert_eq!(result.unwrap(), RadioMode::Safe);
     }
 
-    #[test]
-    fn test_switch_back_to_rage() {
-        let mut mgr = RadioManager::new("wlan0".to_string());
-        let _ = mgr.switch_to(
-            RadioMode::Safe,
-            None,
-            None,
-            Some("MyWiFi"),
-            Some("password123"),
-        ).await;
+    #[tokio::test]
+    async fn test_switch_back_to_rage() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
+        let _ = mgr
+            .switch_to(
+                RadioMode::Safe,
+                None,
+                None,
+                Some("MyWiFi"),
+                Some("password123"),
+            )
+            .await;
         let result = mgr.switch_to(RadioMode::Rage, None, None, None, None).await;
         assert!(result.is_ok());
         assert_eq!(mgr.state, RadioState::Active(RadioMode::Rage));
         assert_eq!(result.unwrap(), RadioMode::Rage);
     }
 
-    #[test]
-    fn test_reset_tears_down() {
-        let mut mgr = RadioManager::new("wlan0".to_string());
-        let _ = mgr.switch_to(
-            RadioMode::Safe,
-            None,
-            None,
-            Some("MyWiFi"),
-            Some("password123"),
-        ).await;
+    #[tokio::test]
+    async fn test_reset_tears_down() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
+        let _ = mgr
+            .switch_to(
+                RadioMode::Safe,
+                None,
+                None,
+                Some("MyWiFi"),
+                Some("password123"),
+            )
+            .await;
         mgr.reset().await;
         assert_eq!(mgr.state, RadioState::Idle);
         assert_eq!(mgr.mode, RadioMode::Rage);
     }
 
-    #[test]
-    fn test_current_mode_after_switch() {
-        let mut mgr = RadioManager::new("wlan0".to_string());
+    #[tokio::test]
+    async fn test_current_mode_after_switch() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
         assert_eq!(mgr.current_mode(), RadioMode::Rage);
-        let _ = mgr.switch_to(
-            RadioMode::Bt,
-            Some("00:11:22:33:44:55"),
-            Some("bcm43436b0"),
-            None,
-            None,
-        ).await;
+        let _ = mgr
+            .switch_to(
+                RadioMode::Bt,
+                Some("00:11:22:33:44:55"),
+                Some("bcm43436b0"),
+                None,
+                None,
+            )
+            .await;
         assert_eq!(mgr.current_mode(), RadioMode::Bt);
         let _ = mgr.switch_to(RadioMode::Rage, None, None, None, None).await;
         assert_eq!(mgr.current_mode(), RadioMode::Rage);
     }
 
-    #[test]
-    fn test_is_transitioning() {
-        let mut mgr = RadioManager::new("wlan0".to_string());
+    #[tokio::test]
+    async fn test_is_transitioning() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
         assert!(!mgr.is_transitioning());
         let _ = mgr.switch_to(RadioMode::Rage, None, None, None, None).await;
         assert!(!mgr.is_transitioning());

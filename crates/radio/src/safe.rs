@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Connect to known WiFi network
 pub async fn connect_known_wifi(ssid: &str, password: &str) -> Result<()> {
@@ -49,12 +49,7 @@ async fn connect_wpa_supplicant(ssid: &str, password: &str) -> Result<()> {
 
     // Run wpa_supplicant
     let status = Command::new("wpa_supplicant")
-        .args([
-            "-B",
-            "-i", "wlan0",
-            "-c", config_path,
-            "-D", "nl80211",
-        ])
+        .args(["-B", "-i", "wlan0", "-c", config_path, "-D", "nl80211"])
         .status()
         .await?;
 
@@ -63,10 +58,7 @@ async fn connect_wpa_supplicant(ssid: &str, password: &str) -> Result<()> {
     }
 
     // Request DHCP
-    let _ = Command::new("dhclient")
-        .args(["wlan0"])
-        .status()
-        .await;
+    let _ = Command::new("dhclient").args(["wlan0"]).status().await;
 
     Ok(())
 }
@@ -80,10 +72,7 @@ pub async fn disconnect_wifi() -> Result<()> {
         .status()
         .await;
 
-    let _ = Command::new("wpa_cli")
-        .args(["disconnect"])
-        .status()
-        .await;
+    let _ = Command::new("wpa_cli").args(["disconnect"]).status().await;
 
     Ok(())
 }
@@ -137,7 +126,6 @@ pub struct WifiStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_safe_module() {

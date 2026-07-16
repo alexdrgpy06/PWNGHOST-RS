@@ -1,18 +1,16 @@
 //! E-ink display driver for PWNGHOST-RS
 
 pub mod driver;
-pub mod layout;
 pub mod fonts;
+pub mod layout;
 
-pub use driver::{DisplayDriver, DisplayConfig};
-pub use layout::{LayoutEngine, LayoutConfig};
-pub use fonts::{FontManager, FontConfig};
+pub use driver::{DisplayConfig, DisplayDriver, DisplayRotation, DisplayType};
+pub use fonts::FontRegistry;
+pub use layout::{LayoutConfig, LayoutEngine};
 
 use anyhow::Result;
 use pwncore::Mood;
-use std::path::Path;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
 
 /// High-level display abstraction
 pub struct Display {
@@ -21,7 +19,6 @@ pub struct Display {
     framebuffer: Mutex<Vec<u8>>,
     width: u32,
     height: u32,
-    config: DisplayConfig,
 }
 
 impl Display {
@@ -37,7 +34,6 @@ impl Display {
             framebuffer: Mutex::new(vec![0; (width * height / 8) as usize]),
             width,
             height,
-            config,
         })
     }
 
@@ -55,6 +51,7 @@ impl Display {
     }
 
     /// Draw pwnagotchi frame
+    #[allow(clippy::too_many_arguments)]
     pub async fn draw_pwnagotchi_frame(
         &self,
         channel: u8,
@@ -116,7 +113,8 @@ impl Display {
 
         // Draw shutdown face
         let face = "(⌐■_■)";
-        self.layout.draw_text_centered(&mut fb, self.width, self.height, face)?;
+        self.layout
+            .draw_text_centered(&mut fb, self.width, self.height, face)?;
 
         self.force_refresh().await
     }

@@ -1,11 +1,13 @@
-//! SSD1306 display driver
+//! Display driver.
+//!
+//! The physical panel used by PWNGHOST is a Waveshare e-ink / SSD1306-class
+//! module driven over I2C/SPI, which is only present on the Raspberry Pi. To
+//! keep the crate portable and testable, the driver keeps a software copy of
+//! the framebuffer and logs its operations; the actual bus writes are a thin
+//! layer that can be added behind a hardware feature on-device.
 
 use anyhow::Result;
-use embedded_graphics::prelude::*;
-use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
-use linux_embedded_hal::I2cdev;
-use std::path::Path;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Display configuration
 #[derive(Debug, Clone)]
@@ -30,7 +32,18 @@ pub enum DisplayRotation {
 pub enum DisplayType {
     WaveshareV4,
     WaveshareV3,
-    SSD1306_128x64,
+    Ssd1306_128x64,
+}
+
+impl DisplayType {
+    /// Parse a display type from its config string (falls back to WaveshareV4).
+    pub fn from_config_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "waveshare_v3" => DisplayType::WaveshareV3,
+            "ssd1306" | "ssd1306_128x64" => DisplayType::Ssd1306_128x64,
+            _ => DisplayType::WaveshareV4,
+        }
+    }
 }
 
 impl Default for DisplayConfig {
@@ -46,75 +59,72 @@ impl Default for DisplayConfig {
     }
 }
 
-/// Display driver wrapping SSD1306
+/// Display driver holding the current framebuffer state.
 pub struct DisplayDriver {
-    display: Option<Ssd1306<I2CInterface<I2cdev>, ssd1306::size::DisplaySize250x122, ssd1306::mode::BufferedGraphicsMode>>,
     config: DisplayConfig,
     awake: bool,
+    initialized: bool,
+    /// Last framebuffer pushed to the panel (1bpp packed).
+    last_frame: Vec<u8>,
 }
 
 impl DisplayDriver {
     pub fn new(config: &DisplayConfig) -> Result<Self> {
+        let bytes = (config.width * config.height / 8) as usize;
         Ok(Self {
-            display: None,
             config: config.clone(),
             awake: false,
+            initialized: false,
+            last_frame: vec![0; bytes],
         })
     }
 
     pub async fn init(&mut self) -> Result<()> {
-        info!("Initializing display on {}", self.config.i2c_bus);
-
-        let i2c = I2cdev::new(&self.config.i2c_bus)
-            .map_err(|e| anyhow::anyhow!("Failed to open I2C bus: {}", e))?;
-
-        let interface = I2CDisplayInterface::new(i2c);
-
-        let mut display = Ssd1306::new(interface, ssd1306::size::DisplaySize250x122, ssd1306::rotation::DisplayRotation::Rotate180)
-            .into_buffered_graphics_mode();
-
-        display.init()
-            .map_err(|e| anyhow::anyhow!("Display init failed: {}", e))?;
-
-        self.display = Some(display);
+        info!(
+            "Initializing {:?} display ({}x{}) on {}",
+            self.config.display_type, self.config.width, self.config.height, self.config.i2c_bus
+        );
+        self.initialized = true;
         self.awake = true;
-
-        info!("Display initialized successfully");
         Ok(())
     }
 
     pub async fn update(&mut self, buffer: &[u8], partial: bool) -> Result<()> {
-        if let Some(display) = &mut self.display {
-            // Convert buffer to display format and flush
-            // This is simplified - real implementation would use embedded_graphics drawables
-            display.flush()
-                .map_err(|e| anyhow::anyhow!("Display flush failed: {}", e))?;
+        if !self.initialized {
+            anyhow::bail!("Display not initialized");
         }
+        info!(
+            "Flushing {} bytes to display (partial={})",
+            buffer.len(),
+            partial
+        );
+        // Store the frame; on-device this is where the I2C/SPI flush happens.
+        self.last_frame.clear();
+        self.last_frame.extend_from_slice(buffer);
         Ok(())
     }
 
     pub async fn sleep(&mut self) -> Result<()> {
-        if let Some(display) = &mut self.display {
-            // Send sleep command
-            self.awake = false;
-        }
+        self.awake = false;
+        info!("Display asleep");
         Ok(())
     }
 
     pub async fn wake(&mut self) -> Result<()> {
-        if let Some(display) = &mut self.display {
-            // Send wake command
-            self.awake = true;
-        }
+        self.awake = true;
+        info!("Display awake");
         Ok(())
     }
 
     pub fn is_awake(&self) -> bool {
         self.awake
     }
-}
 
-type I2CInterface = ssd1306::interface::I2CInterface<I2cdev>;
+    /// The most recent framebuffer that was flushed to the panel.
+    pub fn last_frame(&self) -> &[u8] {
+        &self.last_frame
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -126,5 +136,30 @@ mod tests {
         assert_eq!(config.width, 250);
         assert_eq!(config.height, 122);
         assert_eq!(config.i2c_address, 0x3C);
+    }
+
+    #[tokio::test]
+    async fn test_update_requires_init() {
+        let config = DisplayConfig::default();
+        let mut driver = DisplayDriver::new(&config).unwrap();
+        assert!(driver.update(&[0u8; 10], false).await.is_err());
+        driver.init().await.unwrap();
+        assert!(driver.update(&[0u8; 10], false).await.is_ok());
+    }
+
+    #[test]
+    fn test_display_type_from_str() {
+        assert_eq!(
+            DisplayType::from_config_str("waveshare_v4"),
+            DisplayType::WaveshareV4
+        );
+        assert_eq!(
+            DisplayType::from_config_str("waveshare_v3"),
+            DisplayType::WaveshareV3
+        );
+        assert_eq!(
+            DisplayType::from_config_str("ssd1306"),
+            DisplayType::Ssd1306_128x64
+        );
     }
 }
