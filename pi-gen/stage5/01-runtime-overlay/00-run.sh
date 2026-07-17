@@ -16,8 +16,33 @@ install -d -m 755 \
     "${ROOTFS_DIR}/var/lib/pwnghost/log" \
     "${ROOTFS_DIR}/var/lib/pwnghost/data"
 
+# DIAGNOSTIC (temporary): two real CI runs have failed here with
+# "qemu-arm[-static]: Could not open '/lib/ld-linux-armhf.so.3'" -- the
+# exact same failure survived switching qemu's binfmt registration from
+# dynamic (qemu-arm) to static (qemu-arm-static), which rules out a qemu/
+# binfmt-registration cause (a static interpreter needs no shared libs of
+# its own) and points at the *target* rootfs's own /lib actually missing
+# the file at this exact point, despite on_chroot (which itself needs this
+# same interpreter just to start bash) working fine one substage earlier
+# in 00-install-pwnghost. Capture hard evidence instead of guessing again.
+echo "=== pwnghost-rs diagnostic: state of ${ROOTFS_DIR} before overlay rsync ==="
+ls -la "${ROOTFS_DIR}/lib/ld-linux-armhf.so.3" 2>&1 || echo "MISSING before rsync"
+readlink -f "${ROOTFS_DIR}/lib/ld-linux-armhf.so.3" 2>&1 || true
+ls -la "${ROOTFS_DIR}/lib/arm-linux-gnueabihf/" 2>&1 | head -5 || true
+mount | grep "$(realpath "${ROOTFS_DIR}")" 2>&1 || echo "no active mounts under ROOTFS_DIR"
+echo "=== end diagnostic (pre-rsync) ==="
+
 # Copy the whole overlay (etc/, usr/, lib/) into the rootfs.
 rsync -a files/ "${ROOTFS_DIR}/"
+
+echo "=== pwnghost-rs diagnostic: state of ${ROOTFS_DIR} after overlay rsync ==="
+ls -la "${ROOTFS_DIR}/lib/ld-linux-armhf.so.3" 2>&1 || echo "MISSING after rsync"
+echo "=== end diagnostic (post-rsync) ==="
+on_chroot << 'CANARY'
+echo "chroot-canary: pwd=$(pwd) whoami=$(whoami) uname=$(uname -m)"
+ls -la /lib/ld-linux-armhf.so.3 2>&1 || echo "chroot-canary: MISSING from inside chroot"
+echo "chroot-canary: ok"
+CANARY
 
 chmod 755 "${ROOTFS_DIR}"/usr/local/bin/*.sh 2>/dev/null || true
 chmod 755 "${ROOTFS_DIR}/usr/local/bin/bt-pan-connect"
