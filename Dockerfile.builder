@@ -138,5 +138,15 @@ RUN arm-linux-gnueabihf-gcc -O2 -marm -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=h
       -o /workspace/artifacts/armv7-unknown-linux-gnueabihf/wlan_keepalive \
       /workspace/crates/fw-patcher/vendor/wlan_keepalive.c
 
-# Build the SD card image
-CMD ["/bin/bash", "-c", "cd /workspace/pi-gen && ./build.sh"]
+# Build the SD card image.
+#
+# binfmt_misc registration (docker/setup-qemu-action, or tonistiigi/binfmt)
+# happens on the HOST/runner and doesn't imply the pseudo-filesystem is
+# mounted inside *this* container's own mount namespace -- `--privileged`
+# grants the capability but doesn't bind the mount in automatically.
+# pi-gen's dependencies_check greps /proc/mounts for a literal
+# "binfmt_misc" mount and fails otherwise ("Module binfmt_misc not loaded
+# in host"), confirmed by a real CI run where the mount was missing even
+# with setup-qemu-action already run. Mount it explicitly, ignoring
+# failure in case the host already exposes it (some environments do).
+CMD ["/bin/bash", "-c", "mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null; cd /workspace/pi-gen && ./build.sh"]
