@@ -1,0 +1,6 @@
+[Unit]
+Description=Buffer and memory cleaner
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/buffer-cleaner.sh

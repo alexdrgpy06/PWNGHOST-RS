@@ -3,6 +3,17 @@ name: Release Build
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      board:
+        description: 'Target board (leave blank to build both)'
+        required: false
+        default: ''
+        type: choice
+        options:
+          - ''
+          - pi-zero-w
+          - pi-zero-2w
 
 jobs:
   build-image:
@@ -11,9 +22,9 @@ jobs:
     timeout-minutes: 120
     strategy:
       matrix:
-        board:
-          - pi-zero-w
-          - pi-zero-2w
+        board: [pi-zero-w, pi-zero-2w]
+      fail-fast: false
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.board == '' || github.event.inputs.board == matrix.board }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,26 +40,24 @@ jobs:
 
       - name: Build SD card image
         run: |
-          mkdir -p artifacts
+          mkdir -p pi-gen/deploy
           docker run --rm --privileged \
-            -v $(pwd)/pi-gen:/pi-gen \
-            -v $(pwd)/artifacts:/artifacts \
-            pwnghost-rs-builder \
-            /bin/bash -c "
-              cd /pi-gen
-              IMG_NAME=pwnghost-rs-${{ matrix.board }}-$(date +%Y%m%d) ./build.sh
-            "
+            -e PWNGHOST_BOARD=${{ matrix.board }} \
+            -e IMG_NAME=pwnghost-rs-${{ matrix.board }}-$(date +%Y%m%d) \
+            -v $(pwd)/pi-gen/deploy:/workspace/pi-gen/deploy \
+            pwnghost-rs-builder
 
       - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
           name: pwnghost-rs-${{ matrix.board }}-img
-          path: artifacts/*.img.xz
+          path: pi-gen/deploy/*.img.xz
           retention-days: 30
 
   release:
     name: Create GitHub Release
     needs: build-image
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts

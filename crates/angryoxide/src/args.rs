@@ -11,7 +11,9 @@ pub struct AngryOxideConfig {
     /// Path to the angryoxide binary
     pub binary: String,
 
-    /// Interface to use (e.g., "wlan0mon")
+    /// Interface to use (e.g., "wlan0"). AngryOxide manages monitor mode
+    /// itself via netlink, so this must be a normal interface name - NOT a
+    /// pre-existing `<iface>mon` monitor-mode interface.
     pub interface: String,
 
     /// Channels to scan (comma-separated)
@@ -87,7 +89,7 @@ impl Default for AngryOxideConfig {
     fn default() -> Self {
         Self {
             binary: "/usr/local/bin/angryoxide".to_string(),
-            interface: "wlan0mon".to_string(),
+            interface: "wlan0".to_string(),
             channels: Some("1,6,11".to_string()),
             band: None,
             output: None,
@@ -338,7 +340,7 @@ mod tests {
         let args = build_args(&config).unwrap();
 
         assert!(args.contains(&"-i".to_string()));
-        assert!(args.contains(&"wlan0mon".to_string()));
+        assert!(args.contains(&"wlan0".to_string()));
         assert!(args.contains(&"-c".to_string()));
         assert!(args.contains(&"1,6,11".to_string()));
         assert!(args.contains(&"--headless".to_string()));

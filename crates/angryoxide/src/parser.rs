@@ -1,327 +1,205 @@
-//! AngryOxide JSON line parser
+//! AngryOxide event parsing and output-directory watching.
+//!
+//! Real AngryOxide (Ragnt/AngryOxide) does not emit a structured JSON
+//! protocol on stdout - that was a fabricated assumption in an earlier
+//! version of this module. What AO actually gives us are two independent,
+//! honest signal sources:
+//!
+//! 1. **Authoritative**: AO writes its capture output (`.pcapng`,
+//!    `.hc22000`/hashline files, a kismetdb, and a final gzipped tarball) to
+//!    the directory/prefix passed via `-o`. [`watch_output_dir`] polls that
+//!    directory and emits [`AngryOxideEvent::HandshakeFileWritten`] /
+//!    [`AngryOxideEvent::CaptureFileWritten`] when new or modified files show
+//!    up. This is the only signal we trust for "did we actually capture
+//!    something" - the caller is expected to validate/parse those files
+//!    itself (see `agent::capture`), not infer anything from the filename.
+//! 2. **Best-effort**: AO's headless stdout emits lines shaped like
+//!    `{timestamp} | {message_type:^8} | {content}` (colorized with ANSI
+//!    escapes), where `message_type` is one of `Error|Warning|Info|Priority|
+//!    Status` and `content` is free-text, version-fragile human prose.
+//!    [`parse_status_line`] strips the ANSI codes and extracts the level +
+//!    message for logging/UI display *only*. We deliberately do not attempt
+//!    to reverse-engineer AP/handshake/channel semantics out of `content` -
+//!    that's exactly the fragile fabricated-protocol trap this module used
+//!    to fall into.
 
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
+use tokio::sync::mpsc;
 
 /// Alias used across the crate for the parsed AngryOxide event enum.
 pub type AoEvent = AngryOxideEvent;
 
-/// AngryOxide event types parsed from JSON lines
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+/// Honest AngryOxide event vocabulary.
+///
+/// Every variant here corresponds to something we can actually observe:
+/// a file AO wrote, or a status line AO printed. Nothing is inferred beyond
+/// that.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AngryOxideEvent {
-    /// Access point discovered/updated
-    Ap(ApEvent),
-    /// Client station discovered/updated
-    Client(ClientEvent),
-    /// Handshake captured
-    Handshake(HandshakeEvent),
-    /// Statistics update
-    Stats(StatsEvent),
-    /// Channel hop
-    Channel(ChannelEvent),
-    /// Status/error message
-    Status(StatusEvent),
+    /// A new or modified hashcat-ready handshake/PMKID file (`.hc22000` /
+    /// `.22000`) appeared in AO's output directory. The path is passed
+    /// through as-is; the caller (the capture pipeline) is responsible for
+    /// validating and extracting the real BSSID from the file's contents.
+    HandshakeFileWritten(PathBuf),
+
+    /// A new or modified `.pcapng` capture file appeared in AO's output
+    /// directory. Indicates general capture activity; not on its own proof
+    /// of a captured handshake.
+    CaptureFileWritten(PathBuf),
+
+    /// A best-effort status line parsed from AO's headless stdout, after
+    /// stripping ANSI color codes. Informational only - `message` is
+    /// free-text prose from AO, not a structured payload.
+    StatusLine { level: StatusLevel, message: String },
 }
 
-/// Access point event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApEvent {
-    pub bssid: String,
-    pub ssid: Option<String>,
-    pub channel: u8,
-    pub rssi: i16,
-    pub encryption: String,
-    pub vendor: String,
-    pub clients: Vec<ClientInfo>,
-    pub first_seen: u64,
-    pub last_seen: u64,
+/// Severity of a parsed AngryOxide status line, matching the `message_type`
+/// field AO prints (`Error|Warning|Info|Priority|Status`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusLevel {
+    Error,
+    Warning,
+    Priority,
+    Status,
+    Info,
 }
 
-/// Client station info
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClientInfo {
-    pub mac: String,
-    pub vendor: String,
-    pub rssi: i16,
-    pub channel: u8,
+impl StatusLevel {
+    fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "Error" => Some(Self::Error),
+            "Warning" => Some(Self::Warning),
+            "Priority" => Some(Self::Priority),
+            "Status" => Some(Self::Status),
+            "Info" => Some(Self::Info),
+            _ => None,
+        }
+    }
 }
 
-/// Client station event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClientEvent {
-    pub mac: String,
-    pub vendor: String,
-    pub bssid: String,
-    pub channel: u8,
-    pub rssi: i16,
-    pub first_seen: u64,
-    pub last_seen: u64,
+/// Strip ANSI SGR/color escape sequences (`ESC [ ... final-byte`) from a
+/// line. AngryOxide colorizes its headless status output, so this has to
+/// run before the `{timestamp} | {type} | {content}` split.
+pub fn strip_ansi_codes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next(); // consume '['
+                          // Consume parameter/intermediate bytes up to and including the
+                          // CSI final byte (0x40..=0x7e, e.g. 'm' for SGR).
+            for c2 in chars.by_ref() {
+                if ('\x40'..='\x7e').contains(&c2) {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+
+    out
 }
 
-/// Handshake captured event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HandshakeEvent {
-    pub bssid: String,
-    pub station: String,
-    pub file: String,
-    pub handshake_type: String, // "PMKID" or "WPA" or "WPA2"
-    pub timestamp: u64,
-}
-
-/// Statistics event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StatsEvent {
-    pub aps_count: u32,
-    pub clients_count: u32,
-    pub handshakes_count: u32,
-    pub channel: u8,
-    pub uptime: u64,
-}
-
-/// Channel hop event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelEvent {
-    pub channel: u8,
-    pub timestamp: u64,
-}
-
-/// Status/error message
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StatusEvent {
-    pub level: String, // "info", "warn", "error"
-    pub message: String,
-    pub timestamp: u64,
-}
-
-/// Parse a single line of AngryOxide JSON output
-pub fn parse_json_line(line: &str) -> Result<AngryOxideEvent> {
+/// Parse one line of AngryOxide's headless stdout into a [`StatusLine`]
+/// event. Returns `None` for blank lines or lines that don't match the
+/// expected `{timestamp} | {type:^8} | {content}` shape (e.g. TUI artifacts,
+/// panics, or anything else that isn't a status line) - callers should treat
+/// a `None` as "not a recognized status line", not an error.
+pub fn parse_status_line(raw: &str) -> Option<AoEvent> {
+    let line = strip_ansi_codes(raw);
     let line = line.trim();
     if line.is_empty() {
-        anyhow::bail!("Empty line");
+        return None;
     }
 
-    // Try to parse as JSON
-    let value: serde_json::Value =
-        serde_json::from_str(line).with_context(|| format!("Failed to parse JSON: {}", line))?;
+    let mut parts = line.splitn(3, '|');
+    let _timestamp = parts.next()?;
+    let level_str = parts.next()?;
+    let message = parts.next()?.trim().to_string();
 
-    // Determine event type from structure
-    if let Some(event_type) = value.get("type").and_then(|v| v.as_str()) {
-        match event_type {
-            "ap" => parse_ap_event(value),
-            "client" => parse_client_event(value),
-            "handshake" => parse_handshake_event(value),
-            "stats" => parse_stats_event(value),
-            "channel" => parse_channel_event(value),
-            "status" => parse_status_event(value),
-            _ => anyhow::bail!("Unknown event type: {}", event_type),
+    let level = StatusLevel::parse(level_str)?;
+    Some(AoEvent::StatusLine { level, message })
+}
+
+/// Poll `dir` for new or modified capture-related files written by
+/// AngryOxide, emitting [`AngryOxideEvent::HandshakeFileWritten`] /
+/// [`AngryOxideEvent::CaptureFileWritten`] as they appear.
+///
+/// AngryOxide has no push-based file-change notification, and adding a
+/// dependency like `notify` (inotify-backed) buys little here: the interval
+/// is generous, the directory is small, and polling degrades gracefully
+/// across the tmpfs/network-mount configurations this runs under. So this
+/// intentionally avoids a new crate dependency in favor of a plain
+/// `tokio::time::interval` + mtime diff, mirroring the same approach already
+/// used by `agent::capture::CaptureManager::scan_new_captures`.
+///
+/// Runs until the event channel's receiver is dropped. Safe to spawn once
+/// per [`crate::spawn::AngryOxideHandle`] and leave running for the process
+/// lifetime - it does not need to be restarted when the AO child process
+/// itself crashes/restarts, since the output directory persists across
+/// those restarts.
+pub async fn watch_output_dir(dir: PathBuf, event_tx: mpsc::UnboundedSender<AoEvent>) {
+    let mut seen: HashMap<PathBuf, SystemTime> = HashMap::new();
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
+
+    loop {
+        interval.tick().await;
+
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(entries) => entries,
+            Err(_) => {
+                // Directory may not exist yet (AO creates it lazily); just
+                // retry on the next tick.
+                continue;
+            }
+        };
+
+        loop {
+            let entry = match entries.next_entry().await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(_) => break,
+            };
+
+            let path = entry.path();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default();
+            let is_handshake = matches!(ext, "hc22000" | "22000");
+            let is_capture = ext == "pcapng";
+            if !is_handshake && !is_capture {
+                continue;
+            }
+
+            let modified = match entry.metadata().await.and_then(|m| m.modified()) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            let changed = match seen.get(&path) {
+                Some(prev) => *prev != modified,
+                None => true,
+            };
+            if !changed {
+                continue;
+            }
+            seen.insert(path.clone(), modified);
+
+            let event = if is_handshake {
+                AoEvent::HandshakeFileWritten(path)
+            } else {
+                AoEvent::CaptureFileWritten(path)
+            };
+
+            if event_tx.send(event).is_err() {
+                return; // Receiver dropped; nothing left to do.
+            }
         }
-    } else {
-        // Try to infer from fields
-        infer_event_type(value)
-    }
-}
-
-fn parse_ap_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let ap: ApEvent = serde_json::from_value(value).context("Failed to parse AP event")?;
-    Ok(AngryOxideEvent::Ap(ap))
-}
-
-fn parse_client_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let client: ClientEvent =
-        serde_json::from_value(value).context("Failed to parse client event")?;
-    Ok(AngryOxideEvent::Client(client))
-}
-
-fn parse_handshake_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let hs: HandshakeEvent =
-        serde_json::from_value(value).context("Failed to parse handshake event")?;
-    Ok(AngryOxideEvent::Handshake(hs))
-}
-
-fn parse_stats_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let stats: StatsEvent = serde_json::from_value(value).context("Failed to parse stats event")?;
-    Ok(AngryOxideEvent::Stats(stats))
-}
-
-fn parse_channel_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let ch: ChannelEvent =
-        serde_json::from_value(value).context("Failed to parse channel event")?;
-    Ok(AngryOxideEvent::Channel(ch))
-}
-
-fn parse_status_event(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    let status: StatusEvent =
-        serde_json::from_value(value).context("Failed to parse status event")?;
-    Ok(AngryOxideEvent::Status(status))
-}
-
-fn infer_event_type(value: serde_json::Value) -> Result<AngryOxideEvent> {
-    // Infer from fields present
-    if value.get("bssid").is_some() && value.get("ssid").is_some() {
-        parse_ap_event(value)
-    } else if value.get("bssid").is_some() && value.get("station").is_some() {
-        parse_handshake_event(value)
-    } else if value.get("aps_count").is_some() {
-        parse_stats_event(value)
-    } else if value.get("channel").is_some() && value.get("timestamp").is_some() {
-        parse_channel_event(value)
-    } else if value.get("message").is_some() {
-        parse_status_event(value)
-    } else {
-        anyhow::bail!("Cannot infer event type from: {}", value);
-    }
-}
-
-/// Internal event types for agent consumption
-#[derive(Debug, Clone)]
-pub enum InternalEvent {
-    Ap(ApData),
-    Client(ClientData),
-    Handshake(HandshakeData),
-    Stats(StatsData),
-    Channel(ChannelData),
-    Status(StatusData),
-}
-
-#[derive(Debug, Clone)]
-pub struct ApData {
-    pub bssid: [u8; 6],
-    pub ssid: Option<String>,
-    pub channel: u8,
-    pub rssi: i16,
-    pub encryption: EncryptionType,
-    pub vendor: String,
-    pub clients: Vec<ClientData>,
-    pub first_seen: u64,
-    pub last_seen: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct ClientData {
-    pub mac: [u8; 6],
-    pub vendor: String,
-    pub rssi: i16,
-    pub channel: u8,
-}
-
-#[derive(Debug, Clone)]
-pub struct HandshakeData {
-    pub bssid: [u8; 6],
-    pub station: [u8; 6],
-    pub file: String,
-    pub handshake_type: String,
-    pub timestamp: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct StatsData {
-    pub aps_count: u32,
-    pub clients_count: u32,
-    pub handshakes_count: u32,
-    pub channel: u8,
-    pub uptime: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct ChannelData {
-    pub channel: u8,
-    pub timestamp: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct StatusData {
-    pub level: String,
-    pub message: String,
-    pub timestamp: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EncryptionType {
-    Open,
-    Wep,
-    Wpa,
-    Wpa2,
-    Wpa3,
-    Unknown,
-}
-
-/// Convert AoEvent to internal types
-pub fn ao_event_to_internal(event: AngryOxideEvent) -> Result<InternalEvent> {
-    match event {
-        AngryOxideEvent::Ap(ap) => Ok(InternalEvent::Ap(ApData {
-            bssid: parse_mac(&ap.bssid)?,
-            ssid: ap.ssid,
-            channel: ap.channel,
-            rssi: ap.rssi,
-            encryption: parse_encryption(&ap.encryption),
-            vendor: ap.vendor,
-            clients: ap
-                .clients
-                .into_iter()
-                .map(|c| ClientData {
-                    mac: parse_mac(&c.mac).unwrap_or([0; 6]),
-                    vendor: c.vendor,
-                    rssi: c.rssi,
-                    channel: c.channel,
-                })
-                .collect(),
-            first_seen: ap.first_seen,
-            last_seen: ap.last_seen,
-        })),
-        AngryOxideEvent::Client(client) => Ok(InternalEvent::Client(ClientData {
-            mac: parse_mac(&client.mac)?,
-            vendor: client.vendor,
-            rssi: client.rssi,
-            channel: client.channel,
-        })),
-        AngryOxideEvent::Handshake(hs) => Ok(InternalEvent::Handshake(HandshakeData {
-            bssid: parse_mac(&hs.bssid)?,
-            station: parse_mac(&hs.station)?,
-            file: hs.file,
-            handshake_type: hs.handshake_type,
-            timestamp: hs.timestamp,
-        })),
-        AngryOxideEvent::Stats(stats) => Ok(InternalEvent::Stats(StatsData {
-            aps_count: stats.aps_count,
-            clients_count: stats.clients_count,
-            handshakes_count: stats.handshakes_count,
-            channel: stats.channel,
-            uptime: stats.uptime,
-        })),
-        AngryOxideEvent::Channel(ch) => Ok(InternalEvent::Channel(ChannelData {
-            channel: ch.channel,
-            timestamp: ch.timestamp,
-        })),
-        AngryOxideEvent::Status(status) => Ok(InternalEvent::Status(StatusData {
-            level: status.level,
-            message: status.message,
-            timestamp: status.timestamp,
-        })),
-    }
-}
-
-fn parse_mac(s: &str) -> Result<[u8; 6]> {
-    let parts: Vec<&str> = s.split(':').collect();
-    if parts.len() != 6 {
-        anyhow::bail!("Invalid MAC format: {}", s);
-    }
-    let mut bytes = [0u8; 6];
-    for (i, part) in parts.iter().enumerate() {
-        bytes[i] =
-            u8::from_str_radix(part, 16).with_context(|| format!("Invalid MAC byte: {}", part))?;
-    }
-    Ok(bytes)
-}
-
-fn parse_encryption(s: &str) -> EncryptionType {
-    match s.to_uppercase().as_str() {
-        "OPEN" | "" => EncryptionType::Open,
-        "WEP" => EncryptionType::Wep,
-        "WPA" => EncryptionType::Wpa,
-        "WPA2" | "WPA2-PSK" | "WPA2-CCMP" => EncryptionType::Wpa2,
-        "WPA3" | "WPA3-SAE" => EncryptionType::Wpa3,
-        _ => EncryptionType::Unknown,
     }
 }
 
@@ -330,86 +208,98 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_ap_event() {
-        let json = r#"{"type":"ap","bssid":"aa:bb:cc:dd:ee:ff","ssid":"TestAP","channel":6,"rssi":-45,"encryption":"WPA2","vendor":"TestVendor","clients":[],"first_seen":1000,"last_seen":2000}"#;
-        let event = parse_json_line(json).unwrap();
+    fn test_strip_ansi_codes() {
+        let input =
+            "\u{1b}[32m2024-01-01 00:00:00 UTC\u{1b}[0m | \u{1b}[1mStatus\u{1b}[0m  | hello";
+        let stripped = strip_ansi_codes(input);
+        assert_eq!(stripped, "2024-01-01 00:00:00 UTC | Status  | hello");
+    }
+
+    #[test]
+    fn test_strip_ansi_codes_no_codes() {
+        assert_eq!(strip_ansi_codes("plain text"), "plain text");
+    }
+
+    #[test]
+    fn test_parse_status_line_basic() {
+        let line = "2024-01-01 00:00:00 UTC |  Status  | Channel hop to 6";
+        let event = parse_status_line(line).unwrap();
         match event {
-            AngryOxideEvent::Ap(ap) => {
-                assert_eq!(ap.bssid, "aa:bb:cc:dd:ee:ff");
-                assert_eq!(ap.ssid, Some("TestAP".to_string()));
-                assert_eq!(ap.channel, 6);
-                assert_eq!(ap.rssi, -45);
-                assert_eq!(ap.encryption, "WPA2");
+            AoEvent::StatusLine { level, message } => {
+                assert_eq!(level, StatusLevel::Status);
+                assert_eq!(message, "Channel hop to 6");
             }
-            _ => panic!("Expected Ap event"),
+            _ => panic!("expected StatusLine event"),
         }
     }
 
     #[test]
-    fn test_parse_handshake_event() {
-        let json = r#"{"type":"handshake","bssid":"aa:bb:cc:dd:ee:ff","station":"11:22:33:44:55:66","file":"/tmp/handshake.pcapng","handshake_type":"WPA2","timestamp":1234567890}"#;
-        let event = parse_json_line(json).unwrap();
+    fn test_parse_status_line_with_ansi() {
+        let line =
+            "\u{1b}[31m2024-01-01 00:00:00 UTC\u{1b}[0m | \u{1b}[31m Error  \u{1b}[0m | Something broke";
+        let event = parse_status_line(line).unwrap();
         match event {
-            AngryOxideEvent::Handshake(hs) => {
-                assert_eq!(hs.bssid, "aa:bb:cc:dd:ee:ff");
-                assert_eq!(hs.station, "11:22:33:44:55:66");
-                assert_eq!(hs.handshake_type, "WPA2");
+            AoEvent::StatusLine { level, message } => {
+                assert_eq!(level, StatusLevel::Error);
+                assert_eq!(message, "Something broke");
             }
-            _ => panic!("Expected Handshake event"),
+            _ => panic!("expected StatusLine event"),
         }
     }
 
     #[test]
-    fn test_parse_stats_event() {
-        let json = r#"{"type":"stats","aps_count":10,"clients_count":5,"handshakes_count":2,"channel":6,"uptime":3600}"#;
-        let event = parse_json_line(json).unwrap();
-        match event {
-            AngryOxideEvent::Stats(stats) => {
-                assert_eq!(stats.aps_count, 10);
-                assert_eq!(stats.clients_count, 5);
-                assert_eq!(stats.handshakes_count, 2);
-                assert_eq!(stats.channel, 6);
-            }
-            _ => panic!("Expected Stats event"),
+    fn test_parse_status_line_all_levels() {
+        for level_str in ["Error", "Warning", "Priority", "Status", "Info"] {
+            let line = format!("2024-01-01 00:00:00 UTC | {level_str} | msg");
+            assert!(parse_status_line(&line).is_some(), "failed for {level_str}");
         }
     }
 
     #[test]
-    fn test_parse_mac() {
-        let mac = parse_mac("aa:bb:cc:dd:ee:ff").unwrap();
-        assert_eq!(mac, [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
-        assert_eq!(
-            format!(
-                "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-            ),
-            "aa:bb:cc:dd:ee:ff"
-        );
+    fn test_parse_status_line_rejects_non_status_lines() {
+        assert!(parse_status_line("").is_none());
+        assert!(parse_status_line("not a status line at all").is_none());
+        // A line with an unrecognized level token should not parse.
+        assert!(parse_status_line("2024-01-01 | Bogus | message").is_none());
     }
 
-    #[test]
-    fn test_parse_encryption() {
-        assert_eq!(parse_encryption("WPA2"), EncryptionType::Wpa2);
-        assert_eq!(parse_encryption("open"), EncryptionType::Open);
-        assert_eq!(parse_encryption("WPA3"), EncryptionType::Wpa3);
-        assert_eq!(parse_encryption("UNKNOWN"), EncryptionType::Unknown);
-    }
+    #[tokio::test]
+    async fn test_watch_output_dir_detects_new_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
 
-    #[test]
-    fn test_ao_event_to_internal() {
-        let json = r#"{"type":"ap","bssid":"aa:bb:cc:dd:ee:ff","ssid":"TestAP","channel":6,"rssi":-45,"encryption":"WPA2","vendor":"TestVendor","clients":[],"first_seen":1000,"last_seen":2000}"#;
-        let event = parse_json_line(json).unwrap();
-        let internal = ao_event_to_internal(event).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let watch_dir = dir.clone();
+        tokio::spawn(async move {
+            watch_output_dir(watch_dir, tx).await;
+        });
 
-        match internal {
-            InternalEvent::Ap(ap) => {
-                assert_eq!(ap.bssid, [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
-                assert_eq!(ap.ssid, Some("TestAP".to_string()));
-                assert_eq!(ap.channel, 6);
-                assert_eq!(ap.rssi, -45);
-                assert_eq!(ap.encryption, EncryptionType::Wpa2);
+        // Give the watcher a tick to observe the empty directory first.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        tokio::fs::write(dir.join("capture.hc22000"), b"WPA*...")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.join("capture.pcapng"), b"pcap-bytes")
+            .await
+            .unwrap();
+
+        let mut got_handshake = false;
+        let mut got_capture = false;
+        for _ in 0..10 {
+            if let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await {
+                match event {
+                    AoEvent::HandshakeFileWritten(_) => got_handshake = true,
+                    AoEvent::CaptureFileWritten(_) => got_capture = true,
+                    _ => {}
+                }
             }
-            _ => panic!("Expected Ap event"),
+            if got_handshake && got_capture {
+                break;
+            }
         }
+
+        assert!(got_handshake, "expected a HandshakeFileWritten event");
+        assert!(got_capture, "expected a CaptureFileWritten event");
     }
 }

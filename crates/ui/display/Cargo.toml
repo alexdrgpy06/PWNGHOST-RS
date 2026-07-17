@@ -11,5 +11,23 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 pwncore = { path = "../../pwncore" }
 
+# Real hardware I/O, only pulled in behind the `hardware` feature (see
+# crates/ui/display/src/hardware.rs). `epd-waveshare` drives the Waveshare
+# e-ink panels (SSD1680-class controller) over SPI; `ssd1306` remains for
+# the distinct small I2C OLED variant (`DisplayType::Ssd1306_128x64`).
+# `linux-embedded-hal` provides real `/dev/spidev*` + `/dev/gpiochip*`
+# (character-device GPIO, not the deprecated sysfs interface) backed
+# implementations of the `embedded-hal` 1.0 traits these crates expect;
+# it is Linux-only and will not build on other host targets, which is
+# fine since it's only ever compiled for the Raspberry Pi target.
+embedded-hal = { workspace = true, optional = true }
+epd-waveshare = { workspace = true, optional = true }
+linux-embedded-hal = { workspace = true, optional = true }
+ssd1306 = { workspace = true, optional = true }
+
+[features]
+default = []
+hardware = ["dep:embedded-hal", "dep:epd-waveshare", "dep:linux-embedded-hal", "dep:ssd1306"]
+
 [dev-dependencies]
 tempfile = { workspace = true }

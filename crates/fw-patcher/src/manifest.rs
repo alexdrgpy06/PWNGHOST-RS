@@ -1,4 +1,15 @@
 //! Firmware manifest parsing and hash validation
+//!
+//! # Status: unused legacy code, gated behind `legacy-binary-patch`
+//! Describes the `manifest.json` format that would accompany real CoderFX
+//! firmware + patch files (filename/sha256/size for each, plus expected
+//! post-patch hash). No such manifest, nor the firmware/patch files it
+//! would describe, exist anywhere in this workspace. See `patch.rs`'s
+//! module doc for the full explanation and where the real BCM43436B0
+//! stability fix actually lives (nexmon source patch at pi-gen image-build
+//! time, not a runtime binary patch). This module is not called from
+//! `lib.rs::apply_on_first_boot` and is compiled only when the
+//! `legacy-binary-patch` feature is enabled.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

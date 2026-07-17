@@ -21,3 +21,11 @@ ui = { path = "../ui" }
 
 [build-dependencies]
 anyhow = { workspace = true }
+
+[features]
+default = []
+# Enables real GPIO-based WiFi chip power-cycling (rppal, Raspberry Pi only).
+# Without this feature, `fw_patcher::gpio::power_cycle_wl_reg_on()` is a stub
+# that logs a warning and returns an error, so the healer's PowerCycleGpio
+# action always compiles and degrades gracefully.
+linux-gpio = ["fw-patcher/linux-gpio"]

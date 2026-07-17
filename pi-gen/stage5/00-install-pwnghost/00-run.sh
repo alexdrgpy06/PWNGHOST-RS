@@ -1,18 +1,18 @@
 #!/bin/bash -e
-
-# Stage 5: Install pwnghost-rs + systemd units + config
+# 00-install-pwnghost/00-run.sh - Install pwnghost-rs config + systemd unit.
+#
+# The pwnghost-rs binary itself and AngryOxide were already installed by
+# stage4/00-install-artifacts. This stage lays down /etc/pwnghost, the
+# default config.toml, the pwnghost-rs.service unit, and the manual
+# monstart/monstop helper scripts.
 
 on_chroot << EOF
-# Install built binaries
-mkdir -p /usr/local/bin/
-cp /home/$FIRST_USER_NAME/pwnghost-rs/build/armv7/pwnghost-rs /usr/local/bin/
-chmod +x /usr/local/bin/pwnghost-rs
-
 # Create config directory
 mkdir -p /etc/pwnghost/conf.d
 mkdir -p /etc/pwnghost/handshakes
 mkdir -p /var/log/pwnghost
 mkdir -p /var/tmp/pwnghost
+mkdir -p /usr/local/share/pwnghost/custom-plugins
 
 # Install default config
 cat > /etc/pwnghost/config.toml << 'CONFIG_EOF'
@@ -139,6 +139,7 @@ Wants=network.target
 
 [Service]
 Type=notify
+NotifyAccess=main
 ExecStart=/usr/local/bin/pwnghost-rs --config /etc/pwnghost/config.toml
 Restart=on-failure
 RestartSec=5
@@ -169,87 +170,57 @@ SyslogIdentifier=pwnghost-rs
 WantedBy=multi-user.target
 SERVICE_EOF
 
-# Install monstart/monstop scripts for monitor mode
+# Manual monitor-mode helper scripts, for interactive/admin use only.
+# AngryOxide manages monitor mode itself via netlink at runtime (it takes a
+# normal interface name, e.g. wlan0, and puts it into monitor mode itself) -
+# neither pwnghost-rs.service nor any boot-time script calls these; they
+# exist purely so an operator can toggle monitor mode by hand over SSH.
 cat > /usr/bin/monstart << 'MONSTART_EOF'
 #!/bin/bash
-# Start monitor mode using nexmon
-
-INTERFACE="${1:-wlan0}"
-MON_INTERFACE="${INTERFACE}mon"
-
-# Bring down interface
-ip link set $INTERFACE down 2>/dev/null || true
-
-# Set monitor mode
-iw dev $INTERFACE set type monitor 2>/dev/null || {
-    # Fallback to nexmon monstart
-    /usr/local/bin/nexmon-buildtools/monstart $INTERFACE
-}
-
-# Bring up monitor interface
-ip link set $MON_INTERFACE up 2>/dev/null || true
-
-echo "Monitor mode started on $MON_INTERFACE"
+# Put the Wi-Fi radio into monitor mode as wlan0mon (manual/admin use only).
+set -e
+IFACE="\${1:-wlan0}"
+ip link set "\$IFACE" down
+iw dev "\$IFACE" set type monitor
+ip link set "\$IFACE" name "\${IFACE}mon" 2>/dev/null || true
+ip link set "\${IFACE}mon" up
 MONSTART_EOF
 
 cat > /usr/bin/monstop << 'MONSTOP_EOF'
 #!/bin/bash
-# Stop monitor mode
-
-INTERFACE="${1:-wlan0}"
-MON_INTERFACE="${INTERFACE}mon"
-
-# Bring down monitor interface
-ip link set $MON_INTERFACE down 2>/dev/null || true
-
-# Set back to managed mode
-iw dev $MON_INTERFACE set type managed 2>/dev/null || {
-    /usr/local/bin/nexmon-buildtools/monstop $INTERFACE
-}
-
-# Bring up managed interface
-ip link set $INTERFACE up 2>/dev/null || true
-
-echo "Monitor mode stopped, $INTERFACE back to managed"
+# Return the radio to managed mode (manual/admin use only).
+set -e
+IFACE="\${1:-wlan0}"
+MON="\${IFACE}mon"
+ip link set "\$MON" down 2>/dev/null || true
+iw dev "\$MON" set type managed 2>/dev/null || true
+ip link set "\$MON" name "\$IFACE" 2>/dev/null || true
+ip link set "\$IFACE" up
 MONSTOP_EOF
 
 chmod +x /usr/bin/monstart /usr/bin/monstop
 
-# Install wlan_keepalive daemon
-cat > /usr/local/bin/wlan_keepalive << 'KEEPALIVE_EOF'
-#!/bin/bash
-# WiFi keepalive daemon for BCM43436B0 stability
-
-INTERFACE="${1:-wlan0mon}"
-PING_TARGET="8.8.8.8"
-INTERVAL=30
-
-while true; do
-    if ! ping -c 1 -W 2 -I $INTERFACE $PING_TARGET >/dev/null 2>&1; then
-        # Try to reset interface
-        ip link set $INTERFACE down
-        sleep 1
-        ip link set $INTERFACE up
-        sleep 2
-    fi
-    sleep $INTERVAL
-done
-KEEPALIVE_EOF
-
-chmod +x /usr/local/bin/wlan_keepalive
-
-# Create systemd service for keepalive
-cat > /etc/systemd/system/wlan-keepalive.service << 'KA_EOF'
+# wlan_keepalive: the binary itself was installed by stage4 (cross-compiled
+# from crates/fw-patcher/vendor/wlan_keepalive.c). This unit's shape (path,
+# unit name, positional "iface poll_ms" ExecStart) must match exactly what
+# crates/fw-patcher/src/keepalive.rs writes at runtime, since that module
+# may rewrite/renew this same file - the two are meant to be identical, not
+# two competing implementations. This is NOT the old bash ping/arping stub
+# (that never worked: a monitor-mode interface has no IP stack to route
+# ICMP/ARP through) - it is the real raw-AF_PACKET probe-request daemon.
+cat > /etc/systemd/system/wlan_keepalive.service << 'KEEPALIVE_EOF'
 [Unit]
-Description=WiFi Keepalive for BCM43436B0
+Description=WiFi monitor interface keepalive (BCM43436B0 SDIO bus)
+Documentation=https://github.com/pwnghost-rs/pwnghost-rs
 After=network.target
 Wants=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/wlan_keepalive wlan0mon
+ExecStart=/usr/local/bin/wlan_keepalive wlan0mon 100
 Restart=always
-RestartSec=5
+RestartSec=3
+Nice=10
 StandardOutput=journal
 StandardError=journal
 
@@ -258,17 +229,14 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/run/wlan_keepalive
 
 [Install]
 WantedBy=multi-user.target
-KA_EOF
+KEEPALIVE_EOF
 
-# Enable services
+# Enable the daemons; leave it disabled-by-default's dependencies (network
+# etc.) to systemd ordering. Group/permission setup happens once the runtime
+# overlay (stage5/01-runtime-overlay) has created /etc/pwnghost ownership.
 systemctl enable pwnghost-rs.service
-systemctl enable wlan-keepalive.service
-
-# Set permissions
-chown -R pwn:pwn /etc/pwnghost /var/log/pwnghost /var/tmp/pwnghost
-
+systemctl enable wlan_keepalive.service
 EOF

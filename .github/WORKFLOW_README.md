@@ -11,7 +11,7 @@ git push origin v1.0.0
 ```
 
 ### Manual (workflow dispatch):
-Go to Actions tab → "Build PWNGHOST-RS SD Card Image" → Run workflow → Select target (pi-zero-w or pi-zero-2w)
+Go to Actions tab → "Release Build" → Run workflow → optionally pick a single board (pi-zero-w or pi-zero-2w); leave blank to build both
 
 ## Artifacts
 
@@ -45,7 +45,7 @@ xzcat pwnghost-rs-v1.0.0-armhf.img.xz | sudo dd of=/dev/sdX bs=4M status=progres
 ## Default Credentials
 
 - Web UI: http://pwnghost.local:8080 (user: changeme, pass: changeme)
-- SSH: pwn@pwnghost.local (pass: pwnghost)
+- SSH: pwn@pwnghost.local (pass: pwnagotchi)
 - Hostname: pwnghost.local
 
 ## Customization

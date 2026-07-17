@@ -1,4 +1,28 @@
 //! Patch parsing and application for CoderFX inplace-v7.txt format
+//!
+//! # Status: unused legacy code, gated behind `legacy-binary-patch`
+//! This module implements a generic byte-patch engine (parse an
+//! `inplace-v7.txt`-style patch list, verify old bytes, write new bytes,
+//! atomically replace the firmware file, verify an output hash) for
+//! "CoderFX's 8-layer BCM43436B0 patches". A full search of this workspace
+//! (all sibling project folders plus this repo) found **no CoderFX patch
+//! data anywhere** -- no `manifest.json`, no `inplace-v7.txt`, no firmware
+//! `.bin` blobs. This engine has nothing to operate on and is not called
+//! from `lib.rs::apply_on_first_boot`.
+//!
+//! The real, working fix for BCM43436B0 SDIO-bus instability is a
+//! SOURCE-level patch applied to nexmon before it's compiled (disabling a
+//! `reload_brcm` call that crashes the SDIO bus), applied at image-build
+//! time in `pi-gen`'s nexmon build stage -- see
+//! `oxigotchi/tools/apply_patches.sh` (`patch_pwnlib`) for the reference
+//! mechanism. That happens before this crate's runtime binary ever runs, so
+//! this crate cannot meaningfully perform that fix itself.
+//!
+//! This module is kept only behind the `legacy-binary-patch` Cargo feature
+//! (off by default) in case real CoderFX patch data is ever supplied. The
+//! hashing utilities (`file_sha256`, `bytes_sha256`) are duplicated here and
+//! in `manifest.rs` deliberately, so this module can be deleted wholesale
+//! without touching the manifest format if that day never comes.
 
 use anyhow::{bail, Context, Result};
 use sha2::Digest;

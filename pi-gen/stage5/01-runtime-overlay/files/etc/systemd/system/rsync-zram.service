@@ -1,0 +1,7 @@
+[Unit]
+Description=Sync ZRAM to Disk
+Requires=zram-log.service zram-data.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/rsync-zram.sh

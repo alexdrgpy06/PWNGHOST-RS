@@ -1,0 +1,13 @@
+[Unit]
+Description=pwnghost-rs USB gadget (g_ether) static IP + DHCP for tethered SSH
+DefaultDependencies=no
+After=sys-subsystem-net-devices-usb0.device systemd-modules-load.service
+Wants=sys-subsystem-net-devices-usb0.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/usb-net-setup.sh
+
+[Install]
+WantedBy=sysinit.target

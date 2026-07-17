@@ -12,7 +12,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 use crate::args::{build_args, AngryOxideConfig};
-use crate::parser::{parse_json_line, AoEvent};
+use crate::parser::{parse_status_line, watch_output_dir, AoEvent};
 use crate::recovery::RecoveryManager;
 
 type SharedChild = Arc<Mutex<Option<tokio::process::Child>>>;
@@ -137,7 +137,10 @@ async fn spawn_process(
 
     *child_slot.lock().await = Some(child);
 
-    // Spawn stdout reader: parses each line as an AngryOxide event.
+    // Spawn stdout reader: best-effort parse of AO's headless status lines
+    // (`{timestamp} | {type} | {content}`, ANSI-colored). This is purely
+    // informational (see `parser` module docs) - the authoritative signal
+    // for captures comes from the output-directory watcher below.
     let shutdown_stdout = shutdown_flag.clone();
     tokio::spawn(async move {
         let reader = BufReader::new(stdout);
@@ -148,15 +151,14 @@ async fn spawn_process(
                 break;
             }
 
-            match parse_json_line(&line) {
-                Ok(event) => {
+            match parse_status_line(&line) {
+                Some(event) => {
                     if event_tx.send(event).is_err() {
                         break; // Receiver dropped
                     }
                 }
-                Err(e) => {
-                    debug!("Failed to parse AO line: {}", e);
-                    // Not a JSON line, could be ANSI output - ignore
+                None => {
+                    debug!("Unrecognized AO stdout line: {}", line);
                 }
             }
         }
@@ -236,6 +238,24 @@ pub async fn spawn_angryoxide(config: &AngryOxideConfig) -> Result<AngryOxideHan
         recovery.clone(),
     )
     .await?;
+
+    // Watch AO's output directory (the parent of the `-o` prefix) for new
+    // `.hc22000`/`.pcapng` files. This runs independently of the AO child
+    // process's own lifecycle (it survives crash/restart cycles, since the
+    // directory itself persists), and exits on its own once `event_tx`'s
+    // receiver is dropped.
+    if let Some(output) = &config.output {
+        let watch_dir = output
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| output.clone());
+        let watch_tx = event_tx.clone();
+        tokio::spawn(async move {
+            watch_output_dir(watch_dir, watch_tx).await;
+        });
+    } else {
+        warn!("AngryOxide config has no output path set; capture-file watching is disabled");
+    }
 
     // Auto-restart handler: whenever the recovery manager's backoff clears
     // after a crash, respawn the process (with fresh readers/monitor) so

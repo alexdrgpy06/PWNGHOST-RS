@@ -2,16 +2,11 @@
 name = "fw-patcher"
 version = "0.1.0"
 edition = "2021"
-description = "Firmware patcher for BCM43436B0 (CoderFX 8-layer patches)"
+description = "BCM43436B0 firmware stability support: chip detection, SDIO crash/watchdog monitor, wlan_keepalive daemon management"
 
 [dependencies]
 anyhow = { workspace = true }
-sha2 = { workspace = true }
-hex = { workspace = true }
-tempfile = { workspace = true }
 tracing = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 tokio = { workspace = true }
 libc = { workspace = true }
 glob = "0.3"
@@ -19,9 +14,23 @@ glob = "0.3"
 # rppal only available on Linux (Raspberry Pi)
 rppal = { version = "0.22", optional = true }
 
+# Only needed by the legacy CoderFX binary-patch engine (src/patch.rs,
+# src/manifest.rs), which is unused by default -- see those modules' doc
+# comments. Kept optional so a default build doesn't pull in dependencies
+# that exist only to serve dead code operating on firmware/patch data that
+# does not exist anywhere in this workspace.
+sha2 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
 [features]
 default = []
 linux-gpio = ["rppal"]
+# Re-enables the unused CoderFX manifest/patch modules. See src/patch.rs
+# and src/manifest.rs doc comments for why this is off by default.
+legacy-binary-patch = ["dep:sha2", "dep:hex", "dep:tempfile", "dep:serde", "dep:serde_json"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

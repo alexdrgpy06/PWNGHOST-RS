@@ -1,18 +1,31 @@
 //! Firmware crash monitoring via SDIO RAMRW netlink
 //!
-//! Reads BCM43436B0 firmware crash counters via netlink to nexmon driver
+//! Reads BCM43436B0 firmware crash counters via netlink to nexmon driver.
+//! Cross-checked against the sibling `oxigotchi` project's
+//! `oxigotchi/rust/src/firmware/mod.rs` (same netlink RAMRW mechanism) and
+//! backfilled with its preventive PSM/DPC/RSSI watchdog-counter reset (see
+//! `oxigotchi/rust/src/recovery/mod.rs`), which this module was missing.
+//!
+//! # Recovery policy: no automatic GPIO power-cycle
+//! `run_monitor_task` intentionally does NOT trigger a GPIO WL_REG_ON power
+//! cycle when health goes `Critical` -- see `gpio.rs`'s module doc for why
+//! that corrupts BCM43436B0 (reverts to stock firmware, loses nexmon
+//! monitor-mode patches). The safe automated response here is limited to:
+//! reporting health for the caller to surface (e.g. a UI indicator) and
+//! periodic preventive counter resets (`reset_watchdog_counters`); anything
+//! beyond that (interface restart, physical power cycle) is left to a
+//! higher-level recovery policy, matching oxigotchi's `SoftRecover` /
+//! `HardRecover` split.
 
 use anyhow::Result;
-use libc::{c_int, c_uint, c_void, sockaddr_nl, timeval, AF_NETLINK, SOCK_RAW, SOL_SOCKET};
-use std::mem;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
 /// Netlink family for nexmon (from nexmon driver)
-pub const NETLINK_NEXMON: c_int = 31;
+pub const NETLINK_NEXMON: libc::c_int = 31;
 /// Command for SDIO RAMRW
-pub const CMD_SDIO_RAMRW: c_uint = 0x500;
+pub const CMD_SDIO_RAMRW: libc::c_uint = 0x500;
 
 /// Firmware health status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,8 +141,25 @@ pub const ADDR_CRASH_SUPPRESS: u32 = 0x03C094;
 /// Layer 3: hardfault_recovery counter
 pub const ADDR_HARDFAULT: u32 = 0x03C098;
 
+/// Firmware RAM addresses for PSM/DPC/RSSI watchdog counters (from
+/// oxigotchi's firmware analysis, `oxigotchi/rust/src/recovery/mod.rs`).
+/// Writing zero to these periodically prevents the ~2.5 hour PSM
+/// accumulation that degrades BCM43436B0 firmware over long uptimes. This
+/// is independent of (and a superset of) the crash_suppress/hardfault
+/// counters above, which only catch outright crashes -- PSM buildup is
+/// silent degradation that never trips the crash counters until it's
+/// already too late. PWNGHOST-RS's monitor previously lacked this; it is
+/// backfilled here and wired into `run_monitor_task`.
+pub const ADDR_PSM_COUNTER: u32 = 0x0003_F99C;
+pub const ADDR_DPC_COUNTER: u32 = 0x0003_F9A4;
+pub const ADDR_RSSI_COUNTER: u32 = 0x0003_F9A0;
+
 /// Build netlink frame for SDIO RAMRW
-fn build_netlink_frame(cmd: c_uint, set: bool, payload: &[u8]) -> Vec<u8> {
+// Only called from the `target_os = "linux"` sdio_read/sdio_write; kept
+// unconditional (rather than cfg-gated) so `test_read_payload`/
+// `test_write_payload` below still exercise the framing logic on any host.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn build_netlink_frame(cmd: libc::c_uint, set: bool, payload: &[u8]) -> Vec<u8> {
     let total_len = 16 + 8 + 8 + payload.len(); // nlmsghdr + nexudp + ioctl + payload
     let mut frame = Vec::with_capacity(total_len);
 
@@ -156,6 +186,7 @@ fn build_netlink_frame(cmd: c_uint, set: bool, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Build read payload
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn build_read_payload(addr: u32, length: u32) -> Vec<u8> {
     let mut p = Vec::with_capacity(8);
     p.extend_from_slice(&addr.to_le_bytes());
@@ -164,6 +195,7 @@ fn build_read_payload(addr: u32, length: u32) -> Vec<u8> {
 }
 
 /// Build write payload
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn build_write_payload(addr: u32, data: &[u8]) -> Vec<u8> {
     let mut p = Vec::with_capacity(4 + data.len());
     p.extend_from_slice(&addr.to_le_bytes());
@@ -171,13 +203,20 @@ fn build_write_payload(addr: u32, data: &[u8]) -> Vec<u8> {
     p
 }
 
-/// Read from firmware RAM via SDIO RAMRW
+/// Read from firmware RAM via SDIO RAMRW.
+///
+/// Only implemented for Linux (netlink/AF_NETLINK are Linux-only); other
+/// targets get a stub below so this crate can still `cargo check`/build on
+/// non-Linux dev machines and in cross-target CI matrices (mirrors
+/// oxigotchi's `#[cfg(target_os = "linux")]` split in `firmware/mod.rs`,
+/// which this module previously lacked).
+#[cfg(target_os = "linux")]
 pub async fn sdio_read(addr: u32, length: u32) -> Result<Vec<u8>> {
     let payload = build_read_payload(addr, length);
     let frame = build_netlink_frame(CMD_SDIO_RAMRW, false, &payload);
 
     unsafe {
-        let fd = libc::socket(AF_NETLINK, SOCK_RAW, NETLINK_NEXMON);
+        let fd = libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, NETLINK_NEXMON);
         if fd < 0 {
             return Err(anyhow::anyhow!(
                 "netlink socket failed: {}",
@@ -186,12 +225,12 @@ pub async fn sdio_read(addr: u32, length: u32) -> Result<Vec<u8>> {
         }
 
         // Bind
-        let mut sa: sockaddr_nl = mem::zeroed();
-        sa.nl_family = AF_NETLINK as u16;
+        let mut sa: libc::sockaddr_nl = std::mem::zeroed();
+        sa.nl_family = libc::AF_NETLINK as u16;
         if libc::bind(
             fd,
             &sa as *const _ as *const libc::sockaddr,
-            mem::size_of::<sockaddr_nl>() as u32,
+            std::mem::size_of::<libc::sockaddr_nl>() as u32,
         ) < 0
         {
             libc::close(fd);
@@ -202,20 +241,20 @@ pub async fn sdio_read(addr: u32, length: u32) -> Result<Vec<u8>> {
         }
 
         // Set timeout
-        let tv = timeval {
+        let tv = libc::timeval {
             tv_sec: 3,
             tv_usec: 0,
         };
         libc::setsockopt(
             fd,
-            SOL_SOCKET,
+            libc::SOL_SOCKET,
             libc::SO_RCVTIMEO,
-            &tv as *const _ as *const c_void,
-            mem::size_of::<timeval>() as u32,
+            &tv as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as u32,
         );
 
         // Send
-        let sent = libc::send(fd, frame.as_ptr() as *const c_void, frame.len(), 0);
+        let sent = libc::send(fd, frame.as_ptr() as *const libc::c_void, frame.len(), 0);
         if sent < 0 {
             libc::close(fd);
             return Err(anyhow::anyhow!(
@@ -226,7 +265,7 @@ pub async fn sdio_read(addr: u32, length: u32) -> Result<Vec<u8>> {
 
         // Receive
         let mut resp = vec![0u8; 4096];
-        let n = libc::recv(fd, resp.as_mut_ptr() as *mut c_void, resp.len(), 0);
+        let n = libc::recv(fd, resp.as_mut_ptr() as *mut libc::c_void, resp.len(), 0);
         libc::close(fd);
 
         if n < 0 {
@@ -253,13 +292,22 @@ pub async fn sdio_read(addr: u32, length: u32) -> Result<Vec<u8>> {
     }
 }
 
-/// Write to firmware RAM via SDIO RAMRW
+/// Non-Linux stub: netlink to nexmon isn't available off-device. Returns
+/// zeroed data so callers (health monitor) see "no change" rather than
+/// erroring out during host-side `cargo check`/tests.
+#[cfg(not(target_os = "linux"))]
+pub async fn sdio_read(_addr: u32, length: u32) -> Result<Vec<u8>> {
+    Ok(vec![0u8; length as usize])
+}
+
+/// Write to firmware RAM via SDIO RAMRW.
+#[cfg(target_os = "linux")]
 pub async fn sdio_write(addr: u32, data: &[u8]) -> Result<()> {
     let payload = build_write_payload(addr, data);
     let frame = build_netlink_frame(CMD_SDIO_RAMRW, true, &payload);
 
     unsafe {
-        let fd = libc::socket(AF_NETLINK, SOCK_RAW, NETLINK_NEXMON);
+        let fd = libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, NETLINK_NEXMON);
         if fd < 0 {
             return Err(anyhow::anyhow!(
                 "netlink socket failed: {}",
@@ -267,12 +315,12 @@ pub async fn sdio_write(addr: u32, data: &[u8]) -> Result<()> {
             ));
         }
 
-        let mut sa: sockaddr_nl = mem::zeroed();
-        sa.nl_family = AF_NETLINK as u16;
+        let mut sa: libc::sockaddr_nl = std::mem::zeroed();
+        sa.nl_family = libc::AF_NETLINK as u16;
         if libc::bind(
             fd,
             &sa as *const _ as *const libc::sockaddr,
-            mem::size_of::<sockaddr_nl>() as u32,
+            std::mem::size_of::<libc::sockaddr_nl>() as u32,
         ) < 0
         {
             libc::close(fd);
@@ -282,19 +330,19 @@ pub async fn sdio_write(addr: u32, data: &[u8]) -> Result<()> {
             ));
         }
 
-        let tv = timeval {
+        let tv = libc::timeval {
             tv_sec: 3,
             tv_usec: 0,
         };
         libc::setsockopt(
             fd,
-            SOL_SOCKET,
+            libc::SOL_SOCKET,
             libc::SO_RCVTIMEO,
-            &tv as *const _ as *const c_void,
-            mem::size_of::<timeval>() as u32,
+            &tv as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as u32,
         );
 
-        let sent = libc::send(fd, frame.as_ptr() as *const c_void, frame.len(), 0);
+        let sent = libc::send(fd, frame.as_ptr() as *const libc::c_void, frame.len(), 0);
         libc::close(fd);
 
         if sent < 0 {
@@ -308,12 +356,58 @@ pub async fn sdio_write(addr: u32, data: &[u8]) -> Result<()> {
     }
 }
 
-/// Background monitor task
+/// Non-Linux stub: no-op success (matches oxigotchi's `sdio_write` stub).
+#[cfg(not(target_os = "linux"))]
+pub async fn sdio_write(_addr: u32, _data: &[u8]) -> Result<()> {
+    Ok(())
+}
+
+/// Reset PSM/DPC/RSSI watchdog counters via SDIO RAMRW (backfilled from
+/// oxigotchi's `recovery::reset_watchdog_counters`, ported to use this
+/// crate's native netlink `sdio_write` instead of shelling out to a Python
+/// helper script). Call this periodically as preventive maintenance --
+/// unrelated to the crash_suppress/hardfault health check above. oxigotchi
+/// calls the equivalent every 15 minutes of wall-clock time; see
+/// `run_monitor_task` below for the same cadence.
+pub async fn reset_watchdog_counters() -> Result<()> {
+    let mut last_err = None;
+    for (name, addr) in [
+        ("PSM", ADDR_PSM_COUNTER),
+        ("DPC", ADDR_DPC_COUNTER),
+        ("RSSI", ADDR_RSSI_COUNTER),
+    ] {
+        match sdio_write(addr, &[0, 0, 0, 0]).await {
+            Ok(()) => debug!("reset {} watchdog counter at 0x{:05X}", name, addr),
+            Err(e) => {
+                warn!(
+                    "reset {} watchdog counter at 0x{:05X} failed: {}",
+                    name, addr, e
+                );
+                last_err = Some(e);
+            }
+        }
+    }
+    match last_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// How often (wall-clock) to preventively reset the PSM/DPC/RSSI watchdog
+/// counters, matching oxigotchi's `psm_reset_timer` cadence.
+pub const WATCHDOG_RESET_INTERVAL_SECS: u64 = 15 * 60;
+
+/// Background monitor task: polls crash counters on `interval_secs`, and
+/// separately resets the preventive PSM/DPC/RSSI watchdog counters every
+/// [`WATCHDOG_RESET_INTERVAL_SECS`] regardless of health (backfilled from
+/// oxigotchi -- see module docs).
 pub async fn run_monitor_task(mut monitor: FirmwareMonitor, interval_secs: u64) {
     info!(
-        "Starting firmware crash monitor (interval: {}s)",
-        interval_secs
+        "Starting firmware crash monitor (interval: {}s, watchdog reset: {}s)",
+        interval_secs, WATCHDOG_RESET_INTERVAL_SECS
     );
+
+    let mut secs_since_watchdog_reset: u64 = 0;
 
     loop {
         let health = monitor.poll().await;
@@ -332,7 +426,16 @@ pub async fn run_monitor_task(mut monitor: FirmwareMonitor, interval_secs: u64) 
                     "Firmware critical! crash_suppress={}, hardfault={}",
                     monitor.crash_suppress, monitor.hardfault
                 );
-                // Could trigger healing here
+                // Deliberately NOT triggering a GPIO WL_REG_ON power cycle
+                // here. On BCM43436B0 that reverts the chip to stock
+                // (non-nexmon) firmware, losing monitor-mode support until
+                // a physical power cycle -- see `gpio.rs`'s module doc and
+                // oxigotchi's `recovery::HardRecover` handling, which
+                // explicitly refuses this same action for the same reason.
+                // The safe response is limited to reporting this status
+                // upward (e.g. a UI "firmware crash" indicator) so a
+                // human, or a higher-level policy that restarts the
+                // monitor interface without touching WL_REG_ON, can react.
             }
             FirmwareHealth::Unknown => {
                 warn!("Firmware health unknown (nexmon not available?)");
@@ -340,6 +443,15 @@ pub async fn run_monitor_task(mut monitor: FirmwareMonitor, interval_secs: u64) 
         }
 
         sleep(Duration::from_secs(interval_secs)).await;
+        secs_since_watchdog_reset = secs_since_watchdog_reset.saturating_add(interval_secs);
+
+        if secs_since_watchdog_reset >= WATCHDOG_RESET_INTERVAL_SECS {
+            secs_since_watchdog_reset = 0;
+            match reset_watchdog_counters().await {
+                Ok(()) => info!("PSM/DPC/RSSI watchdog counters reset (preventive)"),
+                Err(e) => debug!("PSM/DPC/RSSI watchdog counter reset skipped: {}", e),
+            }
+        }
     }
 }
 
@@ -389,5 +501,33 @@ mod tests {
         assert_eq!(p.len(), 8);
         assert_eq!(u32::from_le_bytes(p[0..4].try_into().unwrap()), 0x1000);
         assert_eq!(&p[4..8], &[0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    fn test_watchdog_counter_addresses_distinct() {
+        // Backfilled from oxigotchi's recovery::PSM_COUNTER_ADDR etc. Must
+        // stay distinct from each other and from the crash counters.
+        let addrs = [
+            ADDR_CRASH_SUPPRESS,
+            ADDR_HARDFAULT,
+            ADDR_PSM_COUNTER,
+            ADDR_DPC_COUNTER,
+            ADDR_RSSI_COUNTER,
+        ];
+        for (i, a) in addrs.iter().enumerate() {
+            for (j, b) in addrs.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b, "watchdog/crash counter addresses must be distinct");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reset_watchdog_counters_does_not_panic_off_device() {
+        // On non-Linux hosts (or Linux hosts without nexmon loaded) this
+        // will error, but must never panic -- run_monitor_task relies on
+        // that to keep looping.
+        let _ = reset_watchdog_counters().await;
     }
 }

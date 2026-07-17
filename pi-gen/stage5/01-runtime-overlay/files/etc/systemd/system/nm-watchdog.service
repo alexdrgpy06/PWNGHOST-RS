@@ -1,0 +1,12 @@
+[Unit]
+Description=NetworkManager Watchdog (restart on failure)
+After=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nm-watchdog.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

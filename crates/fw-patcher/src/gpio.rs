@@ -3,6 +3,23 @@
 //! The real implementation uses `rppal` and is only compiled when the
 //! `linux-gpio` feature is enabled (i.e. on the Raspberry Pi target). On
 //! other build targets a stub is provided so the workspace still compiles.
+//!
+//! # DANGER: do not wire this into automatic recovery for BCM43436B0
+//! The sibling `oxigotchi` project *used to* GPIO-power-cycle WL_REG_ON as
+//! part of its automatic WiFi-crash recovery, and removed it after
+//! discovering it corrupts BCM43436B0 in production: toggling WL_REG_ON on
+//! this chip reverts it to stock (non-nexmon) firmware, losing
+//! monitor-mode support entirely until a physical power cycle (unplug
+//! USB / PiSugar) -- see `oxigotchi/rust/src/recovery/mod.rs` (the comment
+//! block above `HardRecover`) and `oxigotchi/rust/src/main.rs` around the
+//! `handle_recovery_action` match. oxigotchi's hard recovery now explicitly
+//! *refuses* the GPIO cycle and surfaces a "firmware crash" status instead,
+//! waiting for a human to physically power-cycle the device.
+//!
+//! This module is kept for manual/diagnostic use (e.g. an explicit CLI
+//! subcommand or a `mock`-mode test), but nothing in this crate calls it
+//! automatically -- see `lib.rs::apply_on_first_boot` and
+//! `monitor::run_monitor_task`, which both deliberately avoid it.
 
 use anyhow::Result;
 
@@ -12,7 +29,12 @@ pub const WL_REG_ON_PIN: u8 = 22;
 /// Default pulse duration for power cycle (ms)
 pub const DEFAULT_PULSE_MS: u64 = 100;
 
-/// Power cycle the WiFi chip via WL_REG_ON GPIO
+/// Power cycle the WiFi chip via WL_REG_ON GPIO.
+///
+/// See the module-level DANGER note: on BCM43436B0 this reverts the chip to
+/// stock firmware (no nexmon monitor-mode support) until a physical power
+/// cycle. Only call this deliberately (e.g. a manual recovery CLI command
+/// or diagnostics); never from an automatic health/recovery loop.
 pub async fn power_cycle_wl_reg_on() -> Result<()> {
     power_cycle_wl_reg_on_with_params(WL_REG_ON_PIN, DEFAULT_PULSE_MS).await
 }

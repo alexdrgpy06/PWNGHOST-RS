@@ -1,0 +1,13 @@
+[Unit]
+Description=ZRAM log mount for pwnghost-rs
+Before=pwnghost-rs.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/zram-setup.sh log 50M /var/log/pwnghost
+ExecStop=/usr/local/bin/zram-teardown.sh log
+
+[Install]
+WantedBy=local-fs.target

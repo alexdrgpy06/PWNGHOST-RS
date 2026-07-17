@@ -9,6 +9,7 @@ pub mod personality;
 pub mod plugins;
 pub mod recovery;
 
+pub use capture::CaptureManager;
 pub use epoch::{EpochState, EpochTracker};
 pub use faces::face_for_mood;
 pub use healing::{Healer, HealingAction, HealingConfig, HealingLayer};
@@ -16,15 +17,13 @@ pub use mesh::{MeshManager, MeshPeer, MeshPeerInfo};
 pub use personality::Personality;
 pub use plugins::{LuaPlugin, PluginApi, PluginManager};
 
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use mac_addr::MacAddr;
 use pwncore::{AccessPoint, Channel, Mood, Peer as CorePeer};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Main agent structure
 pub struct Agent {
@@ -164,8 +163,80 @@ impl Agent {
         self.healer.reset();
     }
 
-    /// Select next action based on epoch state, mood, and personality
+    /// Select next action. Consults the RL agent first (if one is loaded);
+    /// falls back to the heuristic personality-driven logic otherwise, or
+    /// whenever the RL policy's suggestion isn't actionable right now (e.g.
+    /// it wants to deauth but the personality has deauth disabled).
     fn select_action(&self) -> AgentAction {
+        if let Some(action) = self.select_action_rl() {
+            return action;
+        }
+        self.select_action_heuristic()
+    }
+
+    /// Ask the loaded RL policy for an action, translating its output into
+    /// an [`AgentAction`]. Returns `None` when no RL agent is loaded, the
+    /// lock is momentarily contended (never blocks the tick loop), or the
+    /// suggested action isn't currently allowed (e.g. deauth/associate
+    /// disabled by personality config) - all of which fall through to the
+    /// heuristic policy.
+    fn select_action_rl(&self) -> Option<AgentAction> {
+        let rl = self.rl_agent.as_ref()?;
+        let mut guard = rl.try_write().ok()?;
+        let features = self.build_features();
+        let p = self.personality.config();
+
+        match guard.select_action(&features) {
+            rl_agent::RlAction::HopChannel(ch) => Some(AgentAction::Hop(ch.clamp(1, 13))),
+            rl_agent::RlAction::Deauth if p.deauth => self
+                .find_target()
+                .map(|t| AgentAction::Deauth(t.bssid.to_string())),
+            rl_agent::RlAction::Associate if p.associate => self
+                .find_target()
+                .map(|t| AgentAction::Associate(t.bssid.to_string())),
+            rl_agent::RlAction::Wait => Some(AgentAction::Stay),
+            rl_agent::RlAction::Sleep(secs) => Some(AgentAction::Sleep(secs as u64)),
+            // Deauth/Associate requested but disabled by personality config.
+            rl_agent::RlAction::Deauth | rl_agent::RlAction::Associate => None,
+        }
+    }
+
+    /// Build the 49-dim observation the RL policy consumes from current
+    /// agent state (AP/station/peer channel histograms + epoch stats).
+    fn build_features(&self) -> rl_agent::Features {
+        let mut features = rl_agent::Features::new();
+
+        for ap in &self.aps {
+            let idx = (ap.channel.value().saturating_sub(1) as usize).min(12);
+            features.ap_histogram[idx] += 1.0;
+            for client in &ap.clients {
+                let cidx = (client.channel.saturating_sub(1) as usize).min(12);
+                features.sta_histogram[cidx] += 1.0;
+            }
+        }
+
+        for peer in &self.peers {
+            let idx = (peer.channel.saturating_sub(1) as usize).min(12);
+            features.peer_histogram[idx] += 1.0;
+        }
+
+        let epoch = &self.epoch_tracker.current;
+        features.epoch_stats[0] = epoch.aps_found as f32;
+        features.epoch_stats[1] = epoch.handshakes_this_epoch as f32;
+        features.epoch_stats[2] = epoch.deauths_sent as f32;
+        features.epoch_stats[3] = epoch.assoc_attempts as f32;
+        features.epoch_stats[4] = epoch.blind_epochs as f32;
+        features.epoch_stats[5] = epoch.total_handshakes as f32;
+
+        features.normalize();
+        features
+    }
+
+    /// Heuristic action selection based on epoch state, mood, and
+    /// personality. This is the fallback used when no RL model is loaded
+    /// (or the RL policy declines to act), and is exactly the original
+    /// decision logic.
+    fn select_action_heuristic(&self) -> AgentAction {
         let epoch = &self.epoch_tracker.current;
         let p = self.personality.config();
 
@@ -273,6 +344,17 @@ impl Agent {
         self.epoch_tracker.total_epochs
     }
 
+    /// Number of APs currently tracked (for web UI / status reporting).
+    pub fn aps_count(&self) -> usize {
+        self.aps.len()
+    }
+
+    /// Currently unreachable: nothing populates individual AP records from a
+    /// live AngryOxide signal today (AO exposes no such data over its
+    /// CLI/stdout interface - see `angryoxide::parser` docs). Kept for
+    /// `update_aps`/tests and as a ready-made insertion point if a future,
+    /// honest AP-discovery signal is added.
+    #[allow(dead_code)]
     fn add_or_update_ap(&mut self, ap: AccessPoint) -> bool {
         if let Some(existing) = self.aps.iter_mut().find(|a| a.bssid == ap.bssid) {
             *existing = ap;
@@ -283,74 +365,43 @@ impl Agent {
         }
     }
 
+    /// Mark the AP with `bssid` as having a captured handshake. Called once
+    /// the capture pipeline (`agent::capture::CaptureManager`) has validated
+    /// a `.hc22000` file with `hcxpcapngtool` and extracted the real BSSID
+    /// from its contents - this is the only place we trust a bssid<->
+    /// handshake association, since AO's own stdout never tells us this.
+    pub fn mark_handshake_captured(&mut self, bssid: MacAddr) {
+        if let Some(ap) = self.aps.iter_mut().find(|a| a.bssid == bssid) {
+            ap.handshake_captured = true;
+        }
+    }
+
+    /// Handle one AngryOxide event. See `angryoxide::parser` for the honest
+    /// event vocabulary: a `HandshakeFileWritten`/`CaptureFileWritten` is a
+    /// real file AO wrote (validated separately by the capture pipeline,
+    /// triggered by the caller upon seeing this event); a `StatusLine` is a
+    /// best-effort, informational-only log line from AO's stdout.
     pub fn handle_event(&mut self, event: &angryoxide::parser::AoEvent) {
+        use angryoxide::parser::{AoEvent, StatusLevel};
+
         match event {
-            angryoxide::parser::AoEvent::Ap(ap_event) => {
-                let bssid = MacAddr::from_str(&ap_event.bssid).unwrap_or_default();
-                let encryption = pwncore::EncryptionType::from_str(&ap_event.encryption);
-                let mut ap = AccessPoint::new(
-                    bssid,
-                    ap_event.channel,
-                    ap_event.rssi,
-                    encryption,
-                    ap_event.vendor.clone(),
-                );
-                if let Some(ref ssid) = ap_event.ssid {
-                    ap = ap.with_ssid(ssid.clone());
-                }
-                ap.first_seen = DateTime::from_timestamp(ap_event.first_seen as i64, 0)
-                    .unwrap_or(DateTime::UNIX_EPOCH);
-                ap.last_seen = DateTime::from_timestamp(ap_event.last_seen as i64, 0)
-                    .unwrap_or(DateTime::UNIX_EPOCH);
-                for ci in &ap_event.clients {
-                    let client_mac = MacAddr::from_str(&ci.mac).unwrap_or_default();
-                    let client =
-                        pwncore::Station::new(client_mac, ci.vendor.clone(), ci.rssi, ci.channel);
-                    ap.add_client(client);
-                }
-                if self.add_or_update_ap(ap) {
-                    self.epoch_tracker.current.aps_seen += 1;
-                }
-            }
-            angryoxide::parser::AoEvent::Client(client_event) => {
-                let client_mac = MacAddr::from_str(&client_event.mac).unwrap_or_default();
-                let client = pwncore::Station::new(
-                    client_mac,
-                    client_event.vendor.clone(),
-                    client_event.rssi,
-                    client_event.channel,
-                );
-                if let Ok(bssid) = MacAddr::from_str(&client_event.bssid) {
-                    if let Some(ap) = self.aps.iter_mut().find(|a| a.bssid == bssid) {
-                        ap.add_client(client);
-                    }
-                }
-                self.epoch_tracker.current.clients_seen =
-                    self.aps.iter().map(|ap| ap.clients.len()).sum();
-            }
-            angryoxide::parser::AoEvent::Handshake(hs_event) => {
-                if let Ok(bssid) = MacAddr::from_str(&hs_event.bssid) {
-                    if let Some(ap) = self.aps.iter_mut().find(|a| a.bssid == bssid) {
-                        ap.handshake_captured = true;
-                    }
-                }
+            AoEvent::HandshakeFileWritten(path) => {
+                info!("AngryOxide wrote a handshake file: {:?}", path);
+                // Track capture activity for mood/epoch purposes now; the
+                // caller is responsible for running the capture pipeline
+                // (hcxpcapngtool validation + move-to-final) and calling
+                // `mark_handshake_captured` with the real bssid it extracts.
                 self.epoch_tracker.current.track_handshake();
             }
-            angryoxide::parser::AoEvent::Stats(stats_event) => {
-                if stats_event.channel > 0 {
-                    self.current_channel = stats_event.channel;
-                }
+            AoEvent::CaptureFileWritten(path) => {
+                debug!("AngryOxide capture activity: {:?}", path);
             }
-            angryoxide::parser::AoEvent::Channel(channel_event) => {
-                self.set_channel(channel_event.channel);
-            }
-            angryoxide::parser::AoEvent::Status(status_event) => {
-                match status_event.level.as_str() {
-                    "error" => error!("AngryOxide: {}", status_event.message),
-                    "warn" => warn!("AngryOxide: {}", status_event.message),
-                    _ => info!("AngryOxide: {}", status_event.message),
-                }
-            }
+            AoEvent::StatusLine { level, message } => match level {
+                StatusLevel::Error => error!("AngryOxide: {}", message),
+                StatusLevel::Warning => warn!("AngryOxide: {}", message),
+                StatusLevel::Priority => info!("AngryOxide [priority]: {}", message),
+                StatusLevel::Status | StatusLevel::Info => info!("AngryOxide: {}", message),
+            },
         }
     }
 
@@ -375,32 +426,6 @@ pub enum AgentAction {
 impl Default for Agent {
     fn default() -> Self {
         Self::new(Personality::default())
-    }
-}
-
-/// Capture manager for handling handshake files
-#[allow(dead_code)]
-pub struct CaptureManager {
-    staging_dir: std::path::PathBuf,
-    final_dir: std::path::PathBuf,
-}
-
-impl CaptureManager {
-    pub fn new(staging: std::path::PathBuf, final_dir: std::path::PathBuf) -> Self {
-        Self {
-            staging_dir: staging,
-            final_dir,
-        }
-    }
-
-    pub async fn scan_new_captures(&self) -> Result<Vec<std::path::PathBuf>> {
-        // Scan staging dir for new captures
-        Ok(vec![])
-    }
-
-    pub async fn validate_and_move(&self, _path: &std::path::Path) -> Result<bool> {
-        // Validate handshake quality and move to final dir
-        Ok(true)
     }
 }
 
@@ -502,59 +527,60 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_ap_event_adds_ap() {
+    fn test_handle_handshake_file_written_event() {
         let mut agent = Agent::default();
         agent.start();
 
-        let ap_event = angryoxide::parser::ApEvent {
-            bssid: "aa:bb:cc:dd:ee:ff".into(),
-            ssid: Some("TestNet".into()),
-            channel: 1,
-            rssi: -60,
-            encryption: "wpa2".into(),
-            vendor: "Intel".into(),
-            clients: vec![],
-            first_seen: 1000,
-            last_seen: 1000,
-        };
-        let event = angryoxide::parser::AoEvent::Ap(ap_event);
-        agent.handle_event(&event);
-
-        assert_eq!(agent.aps.len(), 1);
-        assert_eq!(agent.aps[0].ssid.as_deref(), Some("TestNet"));
-    }
-
-    #[test]
-    fn test_handle_handshake_event() {
-        let mut agent = Agent::default();
-        agent.start();
-
-        let hs_event = angryoxide::parser::HandshakeEvent {
-            bssid: "aa:bb:cc:dd:ee:ff".into(),
-            station: "11:22:33:44:55:66".into(),
-            file: "/tmp/hs.pcap".into(),
-            handshake_type: "WPA2".into(),
-            timestamp: 1000,
-        };
-        let event = angryoxide::parser::AoEvent::Handshake(hs_event);
+        let event =
+            angryoxide::parser::AoEvent::HandshakeFileWritten("/tmp/capture.hc22000".into());
         agent.handle_event(&event);
 
         assert_eq!(agent.epoch_tracker.current.handshakes_this_epoch, 1);
     }
 
     #[test]
-    fn test_handle_channel_event() {
+    fn test_handle_capture_file_written_event_is_informational() {
         let mut agent = Agent::default();
         agent.start();
 
-        let ch_event = angryoxide::parser::ChannelEvent {
-            channel: 6,
-            timestamp: 1000,
-        };
-        let event = angryoxide::parser::AoEvent::Channel(ch_event);
+        let event = angryoxide::parser::AoEvent::CaptureFileWritten("/tmp/capture.pcapng".into());
+        // Should not panic and should not affect epoch counters.
         agent.handle_event(&event);
+        assert_eq!(agent.epoch_tracker.current.handshakes_this_epoch, 0);
+    }
 
-        assert_eq!(agent.current_channel, 6);
+    #[test]
+    fn test_handle_status_line_event_all_levels() {
+        let mut agent = Agent::default();
+        agent.start();
+
+        for level in [
+            angryoxide::parser::StatusLevel::Error,
+            angryoxide::parser::StatusLevel::Warning,
+            angryoxide::parser::StatusLevel::Priority,
+            angryoxide::parser::StatusLevel::Status,
+            angryoxide::parser::StatusLevel::Info,
+        ] {
+            let event = angryoxide::parser::AoEvent::StatusLine {
+                level,
+                message: "test message".to_string(),
+            };
+            // Should not panic for any level.
+            agent.handle_event(&event);
+        }
+    }
+
+    #[test]
+    fn test_mark_handshake_captured() {
+        let mut agent = Agent::default();
+        agent.start();
+
+        let bssid: MacAddr = "aa:bb:cc:dd:ee:ff".parse().unwrap();
+        let ap = AccessPoint::new(bssid, 1, -50, pwncore::EncryptionType::Wpa2, "test".into());
+        agent.aps = vec![ap];
+
+        agent.mark_handshake_captured(bssid);
+        assert!(agent.aps[0].handshake_captured);
     }
 
     #[test]
@@ -563,17 +589,11 @@ mod tests {
         agent.start();
 
         let events = vec![
-            angryoxide::parser::AoEvent::Channel(angryoxide::parser::ChannelEvent {
-                channel: 6,
-                timestamp: 1,
-            }),
-            angryoxide::parser::AoEvent::Channel(angryoxide::parser::ChannelEvent {
-                channel: 11,
-                timestamp: 2,
-            }),
+            angryoxide::parser::AoEvent::HandshakeFileWritten("/tmp/a.hc22000".into()),
+            angryoxide::parser::AoEvent::HandshakeFileWritten("/tmp/b.hc22000".into()),
         ];
         agent.handle_events(&events);
-        assert_eq!(agent.current_channel, 11);
+        assert_eq!(agent.epoch_tracker.current.handshakes_this_epoch, 2);
     }
 
     #[test]

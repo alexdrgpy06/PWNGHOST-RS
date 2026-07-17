@@ -1,10 +1,74 @@
 //! Font handling for the display.
 //!
 //! Wraps `embedded-graphics` built-in monospace ASCII fonts and exposes a
-//! small registry so callers can look them up by name.
+//! small registry so callers can look them up by name, plus a pre-rasterized
+//! bitmap glyph atlas (see [`kaomoji_font_data`]) covering the Unicode
+//! kaomoji glyphs used by the classic pwnagotchi face system (`agent::faces`)
+//! that `embedded-graphics`'s built-in ASCII fonts cannot render at all.
+//!
+//! ## Kaomoji glyph atlas provenance
+//!
+//! `kaomoji_font_data.rs` is a *generated* file: it is not hand-written and
+//! should not be hand-edited. It was produced by rasterizing every
+//! codepoint used across the face strings in `crates/agent/src/faces.rs`
+//! and `crates/ui/display/src/lib.rs::face_for_mood` out of **GNU Unifont
+//! 16.0.04** (<https://unifoundry.com/unifont/>), which is dual-licensed
+//! under the SIL Open Font License 1.1 and the GNU GPLv2+ with the GNU font
+//! embedding exception (either license permits embedding the resulting
+//! bitmap subset in this project). Unifont was chosen because it is a
+//! single font with near-total Unicode BMP coverage (Latin, Arabic,
+//! Kannada, CJK, and the various symbol blocks the kaomoji set spans all at
+//! once), and because it *is already a bitmap font* -- rasterizing it at
+//! its native 16px em produces crisp, un-antialiased 1bpp glyphs with no
+//! runtime TTF parsing required, which matches SPEC.md's stated preference
+//! for "pre-rasterized" face rendering on a resource-constrained ARMv6
+//! target.
+//!
+//! To regenerate `kaomoji_font_data.rs` after the face/kaomoji set changes:
+//! 1. Download a recent Unifont TTF release, e.g.
+//!    `https://github.com/multitheftauto/unifont/releases/download/vX.Y.Z/unifont-X.Y.Z.ttf`
+//!    (official builds no longer ship a `.ttf` directly; this is a
+//!    community mirror that rebuilds one from the official `.hex`/`.bdf`
+//!    sources on every release).
+//! 2. Extract the codepoints used in every face string (see the two files
+//!    above) and rasterize each one to a 16x16 1bpp cell, rows packed
+//!    MSB-first and padded to a byte boundary per row, `bit == 1` meaning
+//!    "ink"/pixel-on. Any Unicode combining mark (there are two in the
+//!    current set, U+0300 and U+0301) must be rasterized with its ink
+//!    shifted into the cell (Unifont defines combining marks with a
+//!    *negative* x-origin meant to stack over the previous glyph) and
+//!    listed in `COMBINING_MARKS` so [`crate::layout`] composites it onto
+//!    the previous cell instead of advancing the cursor.
+//! 3. Emit `(char, [u8; GLYPH_BYTES])` pairs sorted by `char` into
+//!    `KAOMOJI_GLYPHS` so [`kaomoji_glyph`] can binary-search it.
+//!
+//! This was done with a Python + Pillow (FreeType-backed) one-off script;
+//! any TTF rasterizer (`ab_glyph`, `fontdue`, FreeType) would work
+//! equivalently for a future `build.rs`-based regeneration step.
 
+use crate::kaomoji_font_data;
 use embedded_graphics::mono_font::{ascii, MonoFont};
 use std::collections::HashMap;
+
+pub use kaomoji_font_data::{GLYPH_BYTES, GLYPH_CELL_H, GLYPH_CELL_W};
+
+/// Look up the pre-rasterized bitmap for `ch`, if this glyph atlas covers it.
+///
+/// Returns a `GLYPH_CELL_W x GLYPH_CELL_H` 1bpp bitmap, rows packed
+/// MSB-first and padded to a byte boundary per row (bit == 1 means "ink").
+pub fn kaomoji_glyph(ch: char) -> Option<&'static [u8; GLYPH_BYTES]> {
+    kaomoji_font_data::KAOMOJI_GLYPHS
+        .binary_search_by_key(&ch, |(c, _)| *c)
+        .ok()
+        .map(|idx| &kaomoji_font_data::KAOMOJI_GLYPHS[idx].1)
+}
+
+/// True if `ch` is a zero-advance-width combining mark in the kaomoji glyph
+/// set (must be composited onto the previously drawn cell rather than
+/// advancing the cursor to a new one).
+pub fn is_combining_mark(ch: char) -> bool {
+    kaomoji_font_data::COMBINING_MARKS.contains(&ch)
+}
 
 /// Font registry mapping names to built-in monospace fonts.
 pub struct FontRegistry {

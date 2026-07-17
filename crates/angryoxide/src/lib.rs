@@ -6,7 +6,7 @@ pub mod recovery;
 pub mod spawn;
 
 pub use args::AngryOxideConfig;
-pub use parser::{parse_json_line, AoEvent};
+pub use parser::{parse_status_line, watch_output_dir, AoEvent, StatusLevel};
 pub use recovery::RecoveryManager;
 pub use spawn::{spawn_angryoxide, AngryOxideHandle};
 
@@ -26,9 +26,10 @@ mod tests {
 
     #[test]
     fn test_module_structure() {
-        // Verify the public parser API round-trips a real AngryOxide event.
-        let json = r#"{"type":"ap","bssid":"aa:bb:cc:dd:ee:ff","ssid":"TestAP","channel":1,"rssi":-50,"encryption":"WPA2","vendor":"","clients":[],"first_seen":0,"last_seen":0}"#;
-        let event: AoEvent = parse_json_line(json).unwrap();
-        assert!(matches!(event, AoEvent::Ap(_)));
+        // Verify the public parser API round-trips a real AngryOxide status
+        // line (the honest event vocabulary - no fabricated JSON protocol).
+        let line = "2024-01-01 00:00:00 UTC |  Status  | Starting interface wlan0";
+        let event: AoEvent = parse_status_line(line).unwrap();
+        assert!(matches!(event, AoEvent::StatusLine { .. }));
     }
 }

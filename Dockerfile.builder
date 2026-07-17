@@ -81,5 +81,20 @@ RUN mkdir -p /workspace/artifacts/arm-unknown-linux-gnueabihf /workspace/artifac
     cp /workspace/target/arm-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/arm-unknown-linux-gnueabihf/ && \
     cp /workspace/target/armv7-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/armv7-unknown-linux-gnueabihf/
 
+# Cross-compile the vendored wlan_keepalive C daemon (crates/fw-patcher/vendor/
+# wlan_keepalive.c - a real BCM43436B0 SDIO-bus keepalive, ported verbatim
+# from oxigotchi/tools/wlan_keepalive.c; see crates/fw-patcher/src/keepalive.rs
+# for the systemd-unit contract pi-gen's stage5 installs it under). Plain C,
+# no extra deps, so the same armhf cross-gcc used nowhere else in this
+# Dockerfile otherwise is enough - one binary per target, using the same
+# -mcpu split already used for the Rust rustflags (arm1176jzf-s for the
+# ARMv6 Pi Zero W target, cortex-a53 for the ARMv7 Pi Zero 2W target).
+RUN arm-linux-gnueabihf-gcc -O2 -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard \
+      -o /workspace/artifacts/arm-unknown-linux-gnueabihf/wlan_keepalive \
+      /workspace/crates/fw-patcher/vendor/wlan_keepalive.c && \
+    arm-linux-gnueabihf-gcc -O2 -mcpu=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+      -o /workspace/artifacts/armv7-unknown-linux-gnueabihf/wlan_keepalive \
+      /workspace/crates/fw-patcher/vendor/wlan_keepalive.c
+
 # Build the SD card image
 CMD ["/bin/bash", "-c", "cd /workspace/pi-gen && ./build.sh"]

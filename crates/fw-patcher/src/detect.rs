@@ -1,10 +1,35 @@
 //! BCM chip detection from dmesg and device tree
-
+//!
+//! # Canonical chip-ID format
+//! Every code path in this module (and every consumer, in this crate or
+//! elsewhere in the workspace) must agree on ONE string form per chip.
+//! The canonical form is the bare revision string with no `BCM`/`bcm`
+//! prefix, e.g. `"43436B0"`, `"43430"`. This was previously violated: the
+//! device-tree path returned `"43436B0"` while the dmesg fallback path
+//! returned whatever `extract_chip_from_line` scraped verbatim from the
+//! kernel log (e.g. `"BCM43436"`, with the `BCM` prefix and without the
+//! `B0` suffix). Callers like `lib.rs::apply_on_first_boot` that compare
+//! `chip == "43436B0"` would silently take the "no patch needed" branch
+//! whenever detection fell through to dmesg instead of the device tree.
+//! `detect_chip()` now normalizes every path's result through
+//! [`normalize_chip_id`] before returning, so callers only ever see the
+//! canonical form. Known external consumers of this string format:
+//! `crates/radio/src/patchram.rs` and `crates/radio/src/lib.rs` (not owned
+//! by this crate -- see this crate's top-level report/handoff notes).
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 use tokio::process::Command;
 use tracing::info;
+
+/// Canonical chip-ID string for BCM43436B0 (Pi Zero 2 W). All chip-ID
+/// comparisons in this crate should use this constant rather than a
+/// hand-typed literal, to avoid the prefix/suffix drift described above.
+pub const CANONICAL_43436B0: &str = "43436B0";
+/// Canonical chip-ID string for BCM43430 (Pi Zero W / 3B).
+pub const CANONICAL_43430: &str = "43430";
+/// Canonical chip-ID string for BCM4345C5 (Pi 3B+/4 class Bluetooth combo).
+pub const CANONICAL_4345C5: &str = "4345C5";
 
 /// Detected BCM chip type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,9 +43,9 @@ pub enum BcmChip {
 impl BcmChip {
     pub fn as_str(&self) -> &str {
         match self {
-            BcmChip::Bcm43430 => "43430",
-            BcmChip::Bcm43436b0 => "43436B0",
-            BcmChip::Bcm4345c5 => "4345c5",
+            BcmChip::Bcm43430 => CANONICAL_43430,
+            BcmChip::Bcm43436b0 => CANONICAL_43436B0,
+            BcmChip::Bcm4345c5 => CANONICAL_4345C5,
             BcmChip::Unknown(s) => s,
         }
     }
@@ -30,7 +55,26 @@ impl BcmChip {
     }
 }
 
-/// Detect BCM chip from dmesg and device tree
+/// Normalize a raw chip identifier scraped from DT/dmesg/modinfo into the
+/// canonical form used throughout this crate (see module docs above).
+/// Falls back to returning the input unchanged (uppercased) when it does
+/// not match a known chip, so callers can still see `Unknown` values for
+/// diagnostics without crashing.
+pub fn normalize_chip_id(raw: &str) -> String {
+    let upper = raw.to_uppercase();
+    if upper.contains("43436") {
+        CANONICAL_43436B0.to_string()
+    } else if upper.contains("43430") {
+        CANONICAL_43430.to_string()
+    } else if upper.contains("4345") {
+        CANONICAL_4345C5.to_string()
+    } else {
+        upper
+    }
+}
+
+/// Detect BCM chip from dmesg and device tree. Always returns the
+/// canonical chip-ID form (see module docs).
 pub async fn detect_chip() -> Result<String> {
     // Try device tree first (most reliable on Pi)
     if let Ok(chip) = detect_from_dt().await {
@@ -73,9 +117,9 @@ async fn detect_from_dt() -> Result<String> {
             if let Ok(content) = fs::read_to_string(path) {
                 if content.contains("brcm,bcm43436") || content.contains("brcm,bcm43430") {
                     if content.contains("bcm43436") {
-                        return Ok("43436B0".to_string());
+                        return Ok(CANONICAL_43436B0.to_string());
                     } else if content.contains("bcm43430") {
-                        return Ok("43430".to_string());
+                        return Ok(CANONICAL_43430.to_string());
                     }
                 }
             }
@@ -99,7 +143,7 @@ async fn detect_from_dmesg() -> Result<String> {
     for line in output.lines() {
         if line.contains("brcmfmac") && line.contains("chip") {
             if let Some(chip) = extract_chip_from_line(line) {
-                return Ok(chip);
+                return Ok(normalize_chip_id(&chip));
             }
         }
     }
@@ -140,7 +184,7 @@ async fn detect_from_nexmon() -> Result<String> {
     for line in output.lines() {
         if line.contains("chip") || line.contains("firmware") {
             if let Some(chip) = extract_chip_from_line(line) {
-                return Ok(chip);
+                return Ok(normalize_chip_id(&chip));
             }
         }
     }
@@ -160,11 +204,11 @@ pub struct ChipInfo {
 pub async fn get_chip_info() -> Result<ChipInfo> {
     let chip = detect_chip().await?;
     let (fw, nvram) = match chip.as_str() {
-        "43436B0" => (
+        c if c == CANONICAL_43436B0 => (
             "/lib/firmware/brcm/brcmfmac43436-sdio.bin",
             "/lib/firmware/brcm/brcmfmac43436-sdio.txt",
         ),
-        "43430" => (
+        c if c == CANONICAL_43430 => (
             "/lib/firmware/brcm/brcmfmac43430-sdio.bin",
             "/lib/firmware/brcm/brcmfmac43430-sdio.txt",
         ),
@@ -215,6 +259,28 @@ mod tests {
         let line = "brcmfmac: brcmf_chip_attach: Chip ID: 0xa9a6, rev 0x1";
         let chip = extract_chip_from_line(line);
         assert_eq!(chip, Some("0xa9a6".to_string()));
+    }
+
+    /// Regression test for the DT-vs-dmesg chip-ID mismatch: dmesg-derived
+    /// strings like "BCM43436" (with prefix, without "B0" suffix) must
+    /// normalize to the exact same canonical form the DT path and every
+    /// consumer (`lib.rs`, `crates/radio`) compares against.
+    #[test]
+    fn test_normalize_chip_id_matches_canonical_form() {
+        assert_eq!(normalize_chip_id("BCM43436"), CANONICAL_43436B0);
+        assert_eq!(normalize_chip_id("bcm43436"), CANONICAL_43436B0);
+        assert_eq!(normalize_chip_id("43436B0"), CANONICAL_43436B0);
+        assert_eq!(normalize_chip_id("BCM43430"), CANONICAL_43430);
+        assert_eq!(normalize_chip_id("43430"), CANONICAL_43430);
+        assert_eq!(normalize_chip_id("BCM4345C5"), CANONICAL_4345C5);
+        assert_eq!(normalize_chip_id("weirdchip"), "WEIRDCHIP");
+    }
+
+    #[test]
+    fn test_bcm_chip_as_str_matches_canonical_constants() {
+        assert_eq!(BcmChip::Bcm43436b0.as_str(), CANONICAL_43436B0);
+        assert_eq!(BcmChip::Bcm43430.as_str(), CANONICAL_43430);
+        assert_eq!(BcmChip::Bcm4345c5.as_str(), CANONICAL_4345C5);
     }
 
     #[test]

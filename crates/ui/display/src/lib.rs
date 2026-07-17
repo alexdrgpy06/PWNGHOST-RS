@@ -2,6 +2,9 @@
 
 pub mod driver;
 pub mod fonts;
+#[cfg(feature = "hardware")]
+mod hardware;
+mod kaomoji_font_data;
 pub mod layout;
 
 pub use driver::{DisplayConfig, DisplayDriver, DisplayRotation, DisplayType};
@@ -31,7 +34,7 @@ impl Display {
         Ok(Self {
             driver: Mutex::new(driver),
             layout,
-            framebuffer: Mutex::new(vec![0; (width * height / 8) as usize]),
+            framebuffer: Mutex::new(vec![0; driver::packed_frame_bytes(width, height)]),
             width,
             height,
         })
@@ -114,7 +117,7 @@ impl Display {
         // Draw shutdown face
         let face = "(⌐■_■)";
         self.layout
-            .draw_text_centered(&mut fb, self.width, self.height, face)?;
+            .draw_face_centered(&mut fb, self.width, self.height, face)?;
 
         self.force_refresh().await
     }

@@ -1,6 +1,7 @@
 //! BCM43436B0 patchram loader for Bluetooth firmware
 
 use anyhow::Result;
+use fw_patcher::detect::{normalize_chip_id, CANONICAL_43436B0};
 use tokio::process::Command as AsyncCommand;
 use tracing::{info, warn};
 
@@ -12,9 +13,16 @@ pub async fn load_patchram(chip: &str) -> Result<()> {
     let patchram_bin = find_patchram_binary().await?;
 
     // Determine firmware file
-    let firmware = match chip {
-        "bcm43436b0" | "43436B0" => "/lib/firmware/brcm/BCM43436B0.hcd",
-        _ => "/lib/firmware/brcm/BCM43436B0.hcd",
+    let canonical = normalize_chip_id(chip);
+    let firmware = match canonical.as_str() {
+        CANONICAL_43436B0 => "/lib/firmware/brcm/BCM43436B0.hcd",
+        other => {
+            warn!(
+                "No known patchram firmware for chip '{}' (canonical: '{}'); falling back to BCM43436B0.hcd",
+                chip, other
+            );
+            "/lib/firmware/brcm/BCM43436B0.hcd"
+        }
     };
 
     // Check if firmware exists

@@ -3,6 +3,7 @@
 //! Renders the pwnagotchi status frame into a 1-bit-per-pixel packed
 //! framebuffer using `embedded-graphics` and its built-in ASCII fonts.
 
+use crate::fonts;
 use anyhow::Result;
 use embedded_graphics::{
     mono_font::{ascii::FONT_6X10, ascii::FONT_9X15, MonoTextStyle},
@@ -132,21 +133,17 @@ impl LayoutEngine {
     ) -> Result<()> {
         let mut fb = FrameBuffer::new(buffer, width, height);
         let small = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-        let big = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
 
         // Top status bar: name + channel + APs + BT.
         let bt = if bt_connected { "BT" } else { "--" };
         let status = format!("{name} CH{channel} AP{aps_count} {bt}");
         draw_line(&mut fb, &status, &small, self.config.status_x.min(0), 8)?;
 
-        // Face and phrase in the middle.
-        draw_line(
-            &mut fb,
-            face,
-            &big,
-            self.config.face_x,
-            self.config.face_y + 24,
-        )?;
+        // Face and phrase in the middle. Faces are kaomoji (e.g. "( ⚆_⚆)",
+        // "(♥‿‿♥)") whose glyphs are outside embedded-graphics's built-in
+        // ASCII fonts, so they're drawn from the pre-rasterized bitmap
+        // glyph atlas in `crate::fonts` instead of `big`/FONT_9X15.
+        draw_kaomoji_line(&mut fb, face, self.config.face_x, self.config.face_y + 24);
         draw_line(
             &mut fb,
             phrase,
@@ -181,7 +178,9 @@ impl LayoutEngine {
         Ok(())
     }
 
-    /// Draw a single line of text centered horizontally.
+    /// Draw a single line of ASCII text centered horizontally, using
+    /// `embedded-graphics`'s built-in font. Not suitable for kaomoji faces
+    /// (use [`Self::draw_face_centered`] for those).
     pub fn draw_text_centered(
         &self,
         buffer: &mut [u8],
@@ -199,6 +198,23 @@ impl LayoutEngine {
         )
         .draw(&mut fb)
         .ok();
+        Ok(())
+    }
+
+    /// Draw a kaomoji face string centered horizontally, using the
+    /// pre-rasterized bitmap glyph atlas (see `crate::fonts`).
+    pub fn draw_face_centered(
+        &self,
+        buffer: &mut [u8],
+        width: u32,
+        height: u32,
+        face: &str,
+    ) -> Result<()> {
+        let mut fb = FrameBuffer::new(buffer, width, height);
+        let text_w = kaomoji_line_width(face);
+        let x = (width as i32 - text_w) / 2;
+        let y = (height as i32 - fonts::GLYPH_CELL_H as i32) / 2;
+        draw_kaomoji_line(&mut fb, face, x, y);
         Ok(())
     }
 
@@ -229,6 +245,64 @@ fn draw_line(
     Ok(())
 }
 
+/// Draw a kaomoji/face string using the pre-rasterized bitmap glyph atlas
+/// (`crate::fonts::kaomoji_glyph`) instead of `embedded-graphics`'s built-in
+/// ASCII fonts, which lack coverage for these codepoints entirely.
+///
+/// Each non-combining character advances the cursor by one
+/// `fonts::GLYPH_CELL_W`-wide cell; combining marks (e.g. U+0301 in
+/// "•́") are composited onto the previously drawn cell instead. Any
+/// codepoint the atlas doesn't cover is skipped (still advances the
+/// cursor) rather than corrupting the rest of the line.
+fn draw_kaomoji_line(fb: &mut FrameBuffer<'_>, text: &str, x: i32, y: i32) {
+    let cell_w = fonts::GLYPH_CELL_W as i32;
+    let mut cursor_x = x;
+    let mut prev_cell: Option<(i32, i32)> = None;
+
+    for ch in text.chars() {
+        if fonts::is_combining_mark(ch) {
+            if let Some((px, py)) = prev_cell {
+                if let Some(bits) = fonts::kaomoji_glyph(ch) {
+                    blit_glyph(fb, bits, px, py);
+                }
+            }
+            continue;
+        }
+
+        if let Some(bits) = fonts::kaomoji_glyph(ch) {
+            blit_glyph(fb, bits, cursor_x, y);
+        }
+        prev_cell = Some((cursor_x, y));
+        cursor_x += cell_w;
+    }
+}
+
+/// Total pixel width [`draw_kaomoji_line`] would occupy for `text`
+/// (combining marks don't add width).
+fn kaomoji_line_width(text: &str) -> i32 {
+    let cell_w = fonts::GLYPH_CELL_W as i32;
+    text.chars()
+        .filter(|c| !fonts::is_combining_mark(*c))
+        .count() as i32
+        * cell_w
+}
+
+/// Blit a single pre-rasterized glyph cell onto `fb` at `(x, y)` (top-left
+/// origin). Bits are packed MSB-first, padded to a byte boundary per row;
+/// bit == 1 means "ink"/pixel-on.
+fn blit_glyph(fb: &mut FrameBuffer<'_>, bits: &[u8; fonts::GLYPH_BYTES], x: i32, y: i32) {
+    let row_bytes = (fonts::GLYPH_CELL_W as usize).div_ceil(8);
+    for gy in 0..fonts::GLYPH_CELL_H as i32 {
+        for gx in 0..fonts::GLYPH_CELL_W as i32 {
+            let byte = bits[gy as usize * row_bytes + (gx as usize / 8)];
+            let bit = (byte >> (7 - (gx as u32 % 8))) & 1;
+            if bit == 1 {
+                fb.set_pixel(x + gx, y + gy, true);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +325,35 @@ mod tests {
             .unwrap();
         // Some pixels should now be set.
         assert!(buffer.iter().any(|&b| b != 0));
+    }
+
+    #[test]
+    fn test_draw_face_centered_renders_kaomoji() {
+        // Regression test for the "kaomoji renders as tofu" bug: every mood
+        // face in `agent::faces` must actually paint pixels, not just
+        // advance the cursor over unsupported codepoints.
+        let width = 128u32;
+        let height = 64u32;
+        for face in ["( ⚆_⚆)", "(♥‿‿♥)", "(单__单)", "(•̀ᴗ•́)", "(ب__ب)"] {
+            let mut buffer = vec![0u8; (width * height / 8) as usize];
+            let engine = LayoutEngine::new(LayoutConfig::default());
+            engine
+                .draw_face_centered(&mut buffer, width, height, face)
+                .unwrap();
+            assert!(
+                buffer.iter().any(|&b| b != 0),
+                "face {face:?} produced an empty framebuffer"
+            );
+        }
+    }
+
+    #[test]
+    fn test_kaomoji_line_width_ignores_combining_marks() {
+        // "•́" is bullet (U+2022) + combining acute (U+0301): width should
+        // count only the bullet's cell.
+        assert_eq!(
+            kaomoji_line_width("\u{2022}\u{0301}"),
+            fonts::GLYPH_CELL_W as i32
+        );
     }
 }
