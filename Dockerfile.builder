@@ -107,10 +107,19 @@ WORKDIR /workspace
 # Copy entire workspace
 COPY . /workspace
 
-# Build Rust workspace for both targets
+# Build Rust workspace for both targets, with the real-hardware features
+# enabled (e-ink SPI/GPIO output, GPIO WiFi-chip power-cycle) -- without
+# these, pwnghost-rs falls back to no-op display/GPIO backends and silently
+# does nothing on real hardware (confirmed the hard way: shipped without
+# them in the first image, the e-ink stayed blank). package/feature syntax
+# is used rather than a bare --features flag so this doesn't depend on how
+# a given cargo version resolves --features against --workspace when only
+# some member crates define the feature.
 RUN . "$HOME/.cargo/env" && \
-    cargo build --release --target arm-unknown-linux-gnueabihf --workspace && \
-    cargo build --release --target armv7-unknown-linux-gnueabihf --workspace
+    cargo build --release --target arm-unknown-linux-gnueabihf --workspace \
+        --features pwnghost-rs/hardware --features pwnghost-rs/linux-gpio && \
+    cargo build --release --target armv7-unknown-linux-gnueabihf --workspace \
+        --features pwnghost-rs/hardware --features pwnghost-rs/linux-gpio
 
 # Copy built binaries to a known location for pi-gen stages
 RUN mkdir -p /workspace/artifacts/arm-unknown-linux-gnueabihf /workspace/artifacts/armv7-unknown-linux-gnueabihf && \

@@ -48,7 +48,7 @@
 
 use crate::driver::{repack_for_panel, DisplayConfig, PanelKind};
 use anyhow::{anyhow, Context, Result};
-use epd_waveshare::{epd2in13_v2::Epd2in13, epd2in7::Epd2in7, epd2in9_v2::Epd2in9, prelude::*};
+use epd_waveshare::{epd2in13_v2::Epd2in13, epd2in9_v2::Epd2in9, prelude::*};
 use linux_embedded_hal::{
     gpio_cdev::{Chip, LineRequestFlags},
     spidev::{SpiModeFlags, SpidevOptions},
@@ -58,10 +58,12 @@ use tracing::{info, warn};
 
 type Pin = CdevPin;
 
-/// Which concrete e-ink driver struct we're holding.
+/// Which concrete e-ink driver struct we're holding. There's no plain
+/// monochrome epd2in7 variant here (see `PanelKind::resolve`'s doc comment)
+/// -- the published epd-waveshare 0.6.0 only ships the bicolor epd2in7b for
+/// that panel size, so 2.7" falls back to the 2.13" driver upstream.
 enum EinkPanel {
     Epd2in13(Epd2in13<SpidevDevice, Pin, Pin, Pin, Delay>),
-    Epd2in7(Epd2in7<SpidevDevice, Pin, Pin, Pin, Delay>),
     Epd2in9(Epd2in9<SpidevDevice, Pin, Pin, Pin, Delay>),
 }
 
@@ -83,8 +85,10 @@ enum PanelInner {
         delay: Delay,
         panel: EinkPanel,
     },
+    // Boxed: OledDisplay is >1KB, dwarfing the Eink variant's fields and
+    // tripping clippy::large_enum_variant.
     Oled {
-        display: OledDisplay,
+        display: Box<OledDisplay>,
     },
 }
 
@@ -161,10 +165,6 @@ impl HardwarePanel {
                 Epd2in13::new(&mut spi, busy, dc, rst, &mut delay, None)
                     .map_err(|e| anyhow!("Epd2in13::new failed: {e:?}"))?,
             ),
-            PanelKind::Epd2in7 => EinkPanel::Epd2in7(
-                Epd2in7::new(&mut spi, busy, dc, rst, &mut delay, None)
-                    .map_err(|e| anyhow!("Epd2in7::new failed: {e:?}"))?,
-            ),
             PanelKind::Epd2in9 => EinkPanel::Epd2in9(
                 Epd2in9::new(&mut spi, busy, dc, rst, &mut delay, None)
                     .map_err(|e| anyhow!("Epd2in9::new failed: {e:?}"))?,
@@ -179,6 +179,14 @@ impl HardwarePanel {
     }
 
     fn open_oled(config: &DisplayConfig) -> Result<Self> {
+        // `ssd1306::mode::DisplayConfig` is the trait providing `.init()`;
+        // imported unnamed (`as _`) since `crate::driver::DisplayConfig`
+        // (our own config struct, imported above) already owns that name.
+        // The crate is built without ssd1306's "async" feature (see root
+        // Cargo.toml) specifically so this trait's sync `init`/methods
+        // match linux-embedded-hal's I2cdev, which only implements the
+        // sync embedded-hal::i2c::I2c, not embedded_hal_async's.
+        use ssd1306::mode::DisplayConfig as _;
         let i2c = I2cdev::new(&config.i2c_bus)
             .with_context(|| format!("opening I2C bus {}", config.i2c_bus))?;
         let interface = ssd1306::I2CDisplayInterface::new_custom_address(i2c, config.i2c_address);
@@ -194,7 +202,9 @@ impl HardwarePanel {
 
         Ok(Self {
             kind: PanelKind::Ssd1306_128x64,
-            inner: PanelInner::Oled { display },
+            inner: PanelInner::Oled {
+                display: Box::new(display),
+            },
         })
     }
 
@@ -237,7 +247,6 @@ impl HardwarePanel {
                 }
                 match panel {
                     EinkPanel::Epd2in13(p) => push!(p),
-                    EinkPanel::Epd2in7(p) => push!(p),
                     EinkPanel::Epd2in9(p) => push!(p),
                 }
                 Ok(())
@@ -292,7 +301,6 @@ impl HardwarePanel {
                 }
                 match panel {
                     EinkPanel::Epd2in13(p) => sleep!(p),
-                    EinkPanel::Epd2in7(p) => sleep!(p),
                     EinkPanel::Epd2in9(p) => sleep!(p),
                 }
             }
@@ -319,7 +327,6 @@ impl HardwarePanel {
                 }
                 match panel {
                     EinkPanel::Epd2in13(p) => wake!(p),
-                    EinkPanel::Epd2in7(p) => wake!(p),
                     EinkPanel::Epd2in9(p) => wake!(p),
                 }
             }

@@ -31,7 +31,7 @@ axum = { version = "0.7", features = ["ws"] }
 tera = "1.0"
 tower-http = { version = "0.6", features = ["cors"] }
 embedded-graphics = "0.8"
-ssd1306 = { version = "0.10", features = ["async", "graphics"] }
+ssd1306 = { version = "0.10", features = ["graphics"] }
 embedded-hal = "1.0"
 epd-waveshare = "0.6"
 linux-embedded-hal = { version = "0.4", default-features = false, features = ["spi", "gpio_cdev", "i2c"] }

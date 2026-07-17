@@ -40,6 +40,24 @@ apt-get clean
 rm -rf /var/lib/apt/lists/*
 EOF
 
+# --- Disable the userconf-pi interactive first-boot wizard -----------------
+# stage1/01-sys-tweaks already creates the "pwn" user with a fixed password
+# (pi-gen/config: FIRST_USER_NAME/FIRST_USER_PASS) precisely so this image
+# has known-working default credentials, like upstream pwnagotchi images.
+# But DISABLE_FIRST_BOOT_USER_RENAME only controls pi-gen's OWN build-time
+# rename-user step (export-image/01-user-rename) -- it's unrelated to
+# userconf-pi (installed via stage2/01-sys-tweaks' package list), which
+# ships its own separate userconfig.service. That unit is enabled by
+# default and, on a CLI-boot (non-desktop) image like this one, launches an
+# interactive whiptail wizard on tty8 waiting to rename/re-password
+# whatever account is on UID 1000 -- undermining the fixed "pwn" account
+# the moment anyone (or anything) interacts with it. Disable it explicitly,
+# matching exactly what userconf-pi's own `cancel-rename` helper does.
+on_chroot << EOF
+systemctl disable userconfig 2>/dev/null || true
+systemctl enable getty@tty1 2>/dev/null || true
+EOF
+
 # --- Boot partition placeholders --------------------------------------------
 # ENABLE_SSH=1 (pi-gen/config) already enables sshd via stage2/01-sys-tweaks'
 # vendored `systemctl enable ssh`; also drop the stock Raspberry Pi Imager

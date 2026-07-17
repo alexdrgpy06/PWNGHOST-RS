@@ -137,8 +137,6 @@ pub(crate) enum PanelKind {
     /// 122x250, SSD1680 (epd-waveshare's `epd2in13_v2` module, built against
     /// its default `epd2in13_v3` waveform feature -- see module docs above).
     Epd2in13,
-    /// 176x264, SSD1680-family (epd-waveshare's `epd2in7` module).
-    Epd2in7,
     /// 128x296, SSD1680-family (epd-waveshare's `epd2in9_v2` module).
     Epd2in9,
     /// Small I2C OLED HAT (not a Waveshare e-ink panel).
@@ -152,7 +150,6 @@ impl PanelKind {
     pub(crate) fn dimensions(self) -> (u32, u32) {
         match self {
             PanelKind::Epd2in13 => (122, 250),
-            PanelKind::Epd2in7 => (176, 264),
             PanelKind::Epd2in9 => (128, 296),
             PanelKind::Ssd1306_128x64 => (128, 64),
         }
@@ -166,10 +163,16 @@ impl PanelKind {
         let (long, short) = (width.max(height), width.min(height));
         match (long, short) {
             (296, 128) => PanelKind::Epd2in9,
-            (264, 176) => PanelKind::Epd2in7,
-            // 250x122 (the crate's own default) and anything else unrecognized
-            // fall back to the 2.13" panel, which is also the size used in
-            // PLAN.md's hardware test matrix.
+            // 2.7" (264x176) isn't supported here: the published
+            // epd-waveshare 0.6.0 (the pinned version) has no plain
+            // monochrome epd2in7 module, only the bicolor epd2in7b variant
+            // (confirmed by inspecting the actual published crate source --
+            // a plain epd2in7 module exists on the upstream repo's git HEAD
+            // but was never released to crates.io). Falls back to 2.13"
+            // rather than silently misdrawing on a 2.7" panel.
+            // 250x122 (the crate's own default) and anything else
+            // unrecognized also fall back to the 2.13" panel, which is also
+            // the size used in PLAN.md's hardware test matrix.
             _ => PanelKind::Epd2in13,
         }
     }
@@ -231,8 +234,10 @@ struct SoftBackend {
 
 enum Backend {
     Soft(SoftBackend),
+    // Boxed: HardwarePanel is >1KB (holds a full EinkPanel/OledDisplay),
+    // dwarfing SoftBackend and tripping clippy::large_enum_variant.
     #[cfg(feature = "hardware")]
-    Hardware(hardware::HardwarePanel),
+    Hardware(Box<hardware::HardwarePanel>),
 }
 
 /// Display driver holding the current framebuffer state.
@@ -271,7 +276,7 @@ impl DisplayDriver {
             );
             match hardware::HardwarePanel::open(&self.config, panel_kind) {
                 Ok(panel) => {
-                    self.backend = Backend::Hardware(panel);
+                    self.backend = Backend::Hardware(Box::new(panel));
                 }
                 Err(err) => {
                     // Don't silently fall back to the no-op backend: on a
@@ -363,6 +368,13 @@ mod tests {
         assert_eq!(config.pin_rst, 17);
     }
 
+    // With the `hardware` feature, init() deliberately does not fall back to
+    // the no-op backend on failure (see its doc comment) -- it always tries
+    // real SPI/GPIO I/O, which doesn't exist in a plain test/CI environment,
+    // so `.unwrap()` below would always panic there. This test exercises
+    // the soft-backend integration and is only meaningful without that
+    // feature; the real hardware path needs an actual panel to verify.
+    #[cfg(not(feature = "hardware"))]
     #[tokio::test]
     async fn test_update_requires_init() {
         let config = DisplayConfig::default();
@@ -400,7 +412,8 @@ mod tests {
         );
         assert_eq!(
             PanelKind::resolve(DisplayType::WaveshareV4, 264, 176),
-            PanelKind::Epd2in7
+            PanelKind::Epd2in13,
+            "2.7\" isn't supported (no plain mono epd2in7 module in the pinned epd-waveshare 0.6.0), falls back to 2.13\""
         );
         assert_eq!(
             PanelKind::resolve(DisplayType::WaveshareV4, 296, 128),
@@ -416,7 +429,6 @@ mod tests {
     fn test_panel_kind_dimensions_roundtrip() {
         for kind in [
             PanelKind::Epd2in13,
-            PanelKind::Epd2in7,
             PanelKind::Epd2in9,
             PanelKind::Ssd1306_128x64,
         ] {

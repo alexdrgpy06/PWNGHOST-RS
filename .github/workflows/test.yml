@@ -76,6 +76,17 @@ jobs:
           CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
         run: cargo check --workspace --target ${{ matrix.target }}
 
+      # The actual device image (Dockerfile.builder) builds with these
+      # features enabled -- check them here too so a regression surfaces in
+      # a few minutes, not only after a ~50-minute full pi-gen image build.
+      - name: Cross-compile check (hardware features)
+        env:
+          CC_arm_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+          CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+          CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+        run: cargo check --workspace --target ${{ matrix.target }} --features pwnghost-rs/hardware --features pwnghost-rs/linux-gpio
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

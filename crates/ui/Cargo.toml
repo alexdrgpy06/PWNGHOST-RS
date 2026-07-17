@@ -7,3 +7,7 @@ description = "UI components for PWNGHOST-RS (display + web)"
 [dependencies]
 ui-display = { path = "display" }
 ui-web = { path = "web" }
+
+[features]
+default = []
+hardware = ["ui-display/hardware"]

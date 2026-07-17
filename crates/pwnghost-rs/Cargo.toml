@@ -29,3 +29,7 @@ default = []
 # that logs a warning and returns an error, so the healer's PowerCycleGpio
 # action always compiles and degrades gracefully.
 linux-gpio = ["fw-patcher/linux-gpio"]
+# Enables real SPI/GPIO e-ink display output (see crates/ui/display). Without
+# this feature, the display driver falls back to a no-op/logging backend --
+# real hardware never receives any framebuffer writes.
+hardware = ["ui/hardware"]
