@@ -5,3 +5,4 @@
 # Editor / OS
 .DS_Store
 *.swp
+build-artifacts/
