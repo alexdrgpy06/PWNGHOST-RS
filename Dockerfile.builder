@@ -3,6 +3,12 @@
 
 FROM debian:bookworm-slim
 
+# Cross-arch (armhf) packages below aren't visible to apt until the foreign
+# architecture is registered -- without this, apt-get install just reports
+# "Unable to locate package" for every ":armhf" package (confirmed by a real
+# CI failure).
+RUN dpkg --add-architecture armhf
+
 # Install pi-gen dependencies
 RUN apt-get update && apt-get install -y \
     binfmt-support \
@@ -64,6 +70,17 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 ENV CARGO_HOME=/root/.cargo
 ENV PATH=/root/.cargo/bin:$PATH
 ENV PKG_CONFIG_ALLOW_CROSS=1
+# Without an explicit target linker, cargo falls back to the host's plain
+# `cc` to link ARM object files, which fails ("incompatible with
+# elf64-x86-64") -- confirmed by a real local Docker build. .github/workflows/
+# test.yml's cross-compile-check job already sets these; Dockerfile.builder
+# never did.
+ENV CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+ENV CC_arm_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
+ENV CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
+ENV CXX_arm_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
+ENV CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
 ENV PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
 
 WORKDIR /workspace
@@ -89,10 +106,16 @@ RUN mkdir -p /workspace/artifacts/arm-unknown-linux-gnueabihf /workspace/artifac
 # Dockerfile otherwise is enough - one binary per target, using the same
 # -mcpu split already used for the Rust rustflags (arm1176jzf-s for the
 # ARMv6 Pi Zero W target, cortex-a53 for the ARMv7 Pi Zero 2W target).
-RUN arm-linux-gnueabihf-gcc -O2 -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard \
+# -marm forces ARM (not Thumb) instruction encoding: Debian's cross-gcc
+# defaults to Thumb, and arm1176jzf-s (ARMv6) only has Thumb-1, which can't
+# express the gnueabihf hard-float VFP calling convention ("sorry,
+# unimplemented: Thumb-1 'hard-float' VFP ABI" -- confirmed by a real local
+# build). Applied to both targets for consistency, though only the ARMv6
+# one is strictly required.
+RUN arm-linux-gnueabihf-gcc -O2 -marm -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard \
       -o /workspace/artifacts/arm-unknown-linux-gnueabihf/wlan_keepalive \
       /workspace/crates/fw-patcher/vendor/wlan_keepalive.c && \
-    arm-linux-gnueabihf-gcc -O2 -mcpu=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+    arm-linux-gnueabihf-gcc -O2 -marm -mcpu=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard \
       -o /workspace/artifacts/armv7-unknown-linux-gnueabihf/wlan_keepalive \
       /workspace/crates/fw-patcher/vendor/wlan_keepalive.c
 
