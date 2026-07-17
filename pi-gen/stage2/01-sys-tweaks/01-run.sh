@@ -28,7 +28,15 @@ fi
 
 
 on_chroot <<- EOF
-	systemctl enable rpi-resize
+	# rpi-resize.service only exists in a newer (Trixie-targeted) build of
+	# raspberrypi-sys-mods -- confirmed absent from the real bookworm armhf
+	# package (20250930~bookworm) by extracting it directly. That bookworm
+	# build already handles first-boot rootfs resize via its own
+	# usr/lib/raspberrypi-sys-mods/firstboot initramfs-tools hooks (no
+	# systemd unit to enable, they just run), so this is a no-op on bookworm
+	# today -- kept best-effort rather than removed in case a future
+	# raspberrypi-sys-mods bump adds the unit back.
+	systemctl enable rpi-resize 2>/dev/null || true
 
 	for GRP in input spi i2c gpio; do
 		groupadd -f -r "\$GRP"
