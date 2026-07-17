@@ -12,7 +12,7 @@ pub use buffer::RolloutBuffer;
 pub use checkpoint::CheckpointManager;
 pub use features::Features;
 pub use model::{ActorCritic, ModelConfig};
-pub use policy::{HeuristicPolicy, Policy, RlAction};
+pub use policy::{BanditPolicy, HeuristicPolicy, Policy, RlAction};
 
 use anyhow::Result;
 use tracing::info;
@@ -63,8 +63,18 @@ pub fn init_agent(config: &RlAgentConfig) -> Result<RlAgent> {
             model,
         ))))
     } else if config.use_heuristic_fallback {
-        info!("Using heuristic policy (no model loaded)");
-        Ok(RlAgent::new())
+        // BanditPolicy replaces the old static HeuristicPolicy here: it's a
+        // strict upgrade for a device with no trained model on it (no A2C
+        // checkpoint exists yet -- that needs an offline training pipeline
+        // and real deployment data, neither of which exist). It behaves
+        // similarly to the heuristic early on (high initial exploration,
+        // biased toward channels with observed AP activity) and then
+        // actually improves its channel/action choices from real reward
+        // signals over the device's lifetime -- see `BanditPolicy`'s docs.
+        info!("Using online-learning bandit policy (no trained model loaded)");
+        Ok(RlAgent::with_policy(Box::new(policy::BanditPolicy::new(
+            config.action_dim,
+        ))))
     } else {
         anyhow::bail!("No model path provided and heuristic fallback disabled")
     }

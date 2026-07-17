@@ -46,6 +46,28 @@ impl RlAgent {
     pub fn policy_name(&self) -> String {
         "heuristic-v1".into()
     }
+
+    /// Feed back the real-world outcome of the last action this agent
+    /// selected (e.g. a captured handshake, a blind epoch) to the
+    /// underlying policy. A no-op unless the policy actually learns
+    /// online (see [`crate::policy::BanditPolicy`]).
+    pub fn observe_reward(&mut self, reward: f32) {
+        if let Some(action) = self.last_action {
+            self.policy.observe_reward(action, reward);
+        }
+    }
+
+    /// Serialize the policy's learned state for persistence across
+    /// reboots (see `agent::recovery`). `None` if the current policy has
+    /// nothing to persist.
+    pub fn export_policy_state(&self) -> Option<Vec<u8>> {
+        self.policy.export_state()
+    }
+
+    /// Restore previously persisted policy state.
+    pub fn import_policy_state(&mut self, data: &[u8]) {
+        self.policy.import_state(data);
+    }
 }
 
 impl Default for RlAgent {
@@ -63,6 +85,32 @@ mod tests {
         let agent = RlAgent::new();
         assert_eq!(agent.total_decisions(), 0);
         assert!(agent.last_action().is_none());
+    }
+
+    #[test]
+    fn test_observe_reward_without_prior_action_is_noop() {
+        let mut agent = RlAgent::new();
+        agent.observe_reward(1.0); // no last_action yet; must not panic
+    }
+
+    #[test]
+    fn test_observe_reward_applies_to_bandit_policy() {
+        let mut agent = RlAgent::with_policy(Box::new(crate::policy::BanditPolicy::new(16)));
+        let features = Features::new();
+        agent.select_action(&features);
+        agent.observe_reward(1.0);
+        // The policy learned something -- exported state differs from a
+        // freshly constructed one.
+        let state = agent.export_policy_state().expect("bandit exports state");
+        let mut fresh = crate::policy::BanditPolicy::new(16);
+        fresh.import_state(&state);
+        assert!(fresh.total_updates() > 0);
+    }
+
+    #[test]
+    fn test_export_import_policy_state_noop_for_heuristic() {
+        let agent = RlAgent::new();
+        assert!(agent.export_policy_state().is_none());
     }
 
     #[test]

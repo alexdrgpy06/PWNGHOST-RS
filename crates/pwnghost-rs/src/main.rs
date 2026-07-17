@@ -231,6 +231,26 @@ async fn main() -> anyhow::Result<()> {
         ),
     }
 
+    // Recovery: restore progress (xp/level/handshake+pmkid counts, per-AP
+    // bond encounters, the RL policy's learned Q-values) from a prior run,
+    // so a device's progression survives a reboot instead of resetting to
+    // zero every power cycle. `RecoveryManager`/`RecoveryState` and the RL
+    // policy's `export_state`/`import_state` were all fully implemented and
+    // unit-tested but never actually wired up before - this is the fix.
+    // Lives under /var/lib/pwnghost, not the zram-backed /var/log or
+    // /var/tmp (see SPEC.md's SD-card-longevity design) since this is
+    // exactly the state we want to survive a reboot/power loss.
+    let mut recovery_manager =
+        agent::recovery::RecoveryManager::new("/var/lib/pwnghost/recovery.json", 300);
+    if let Err(e) = recovery_manager.load().await {
+        warn!(
+            "Failed to load recovery state (starting fresh, this is expected on first boot): {}",
+            e
+        );
+    }
+    recovery_manager.apply_to_agent(&mut agent);
+    agent.personality.update_on_reboot();
+
     // Mesh manager: advertises our own state via `build_mesh_ie` (for
     // whatever embeds it into beacons/probe responses) and prunes stale
     // peers each tick. NOTE: nothing calls `update_peer()` with real data
@@ -269,6 +289,12 @@ async fn main() -> anyhow::Result<()> {
     // systemd watchdog ping. Harmless if the unit doesn't set
     // `WatchdogSec=`; ready to use as soon as it does.
     let mut watchdog_interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
+
+    // Periodic recovery save, throttled to `recovery_manager.save_interval()`
+    // (real wall-clock time, independent of the epoch tick rate) rather than
+    // every tick, since /var/lib/pwnghost lives on the SD card, not zram.
+    let mut recovery_save_interval = tokio::time::interval(recovery_manager.save_interval());
+    recovery_save_interval.tick().await; // first tick fires immediately; skip it
 
     // Once the AngryOxide event channel closes for good, stop selecting on
     // it (recv() on a closed channel resolves immediately, which would
@@ -492,6 +518,12 @@ async fn main() -> anyhow::Result<()> {
                     warn!("sd_notify WATCHDOG=1 failed: {}", e);
                 }
             }
+            _ = recovery_save_interval.tick() => {
+                recovery_manager.update_from_agent(&agent);
+                if let Err(e) = recovery_manager.save().await {
+                    warn!("Failed to save recovery state: {}", e);
+                }
+            }
             _ = signal::ctrl_c() => {
                 info!("Shutdown signal received");
                 break;
@@ -503,6 +535,13 @@ async fn main() -> anyhow::Result<()> {
     info!("Shutting down...");
     agent.stop();
     ao_handle.stop().await?;
+
+    // Final recovery save so a clean shutdown never loses progress made
+    // since the last periodic save.
+    recovery_manager.update_from_agent(&agent);
+    if let Err(e) = recovery_manager.save().await {
+        warn!("Failed to save recovery state on shutdown: {}", e);
+    }
 
     if let Some(d) = display {
         d.show_shutdown().await?;

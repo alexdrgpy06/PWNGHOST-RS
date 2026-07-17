@@ -91,6 +91,23 @@ impl Agent {
         let channel = Channel::new(self.current_channel).unwrap_or(Channel(1));
         self.epoch_tracker.advance(channel);
 
+        // The epoch that just finished is now the newest entry in history
+        // (pushed there by `advance` before rotating `current`). If it saw
+        // no APs at all, apply the real "missed opportunity" penalty to
+        // personality progress and feed a real negative reward to the RL
+        // policy -- both were previously only ever computed in isolated
+        // unit tests, never from the actual running agent.
+        let was_blind = self
+            .epoch_tracker
+            .history
+            .back()
+            .map(|e| e.aps_found == 0)
+            .unwrap_or(false);
+        if was_blind {
+            self.personality.update_on_missed();
+            self.observe_rl_reward(-0.2);
+        }
+
         // Observe current environment
         {
             let epoch = &mut self.epoch_tracker.current;
@@ -374,6 +391,26 @@ impl Agent {
         if let Some(ap) = self.aps.iter_mut().find(|a| a.bssid == bssid) {
             ap.handshake_captured = true;
         }
+        // This is real, honestly-sourced progress (a validated capture, not
+        // a guess) -- previously `Personality::update_on_handshake` and the
+        // RL policy's reward feedback were both fully implemented and unit-
+        // tested but never actually called from here, so a device's
+        // XP/level and its RL policy's learned values never moved no
+        // matter how many real handshakes it captured.
+        self.personality.update_on_handshake(bssid.octets());
+        self.observe_rl_reward(1.0);
+    }
+
+    /// Feed a reward signal to the loaded RL policy for whatever action it
+    /// selected last, if one is loaded. Never blocks the tick loop (skips
+    /// silently if the lock is momentarily contended, same convention as
+    /// `select_action_rl`).
+    fn observe_rl_reward(&self, reward: f32) {
+        if let Some(rl) = self.rl_agent.as_ref() {
+            if let Ok(mut guard) = rl.try_write() {
+                guard.observe_reward(reward);
+            }
+        }
     }
 
     /// Handle one AngryOxide event. See `angryoxide::parser` for the honest
@@ -581,6 +618,42 @@ mod tests {
 
         agent.mark_handshake_captured(bssid);
         assert!(agent.aps[0].handshake_captured);
+    }
+
+    #[test]
+    fn test_mark_handshake_captured_awards_personality_xp() {
+        let mut agent = Agent::default();
+        agent.start();
+
+        let bssid: MacAddr = "aa:bb:cc:dd:ee:ff".parse().unwrap();
+        let ap = AccessPoint::new(bssid, 1, -50, pwncore::EncryptionType::Wpa2, "test".into());
+        agent.aps = vec![ap];
+
+        let xp_before = agent.personality.stats().xp;
+        let handshakes_before = agent.personality.stats().handshakes;
+        agent.mark_handshake_captured(bssid);
+        assert!(agent.personality.stats().xp > xp_before);
+        assert_eq!(agent.personality.stats().handshakes, handshakes_before + 1);
+        assert_eq!(agent.personality.encounters_for(&bssid.octets()), 1);
+    }
+
+    #[test]
+    fn test_blind_epoch_applies_missed_penalty() {
+        let mut agent = Agent::default();
+        agent.start();
+        agent.aps = Vec::new(); // no APs -> the epoch that just ran is blind
+
+        let xp_before = agent.personality.stats().xp;
+        // Two ticks: the first tick's `advance()` finalizes epoch 0 (which
+        // has aps_found == 0 from Agent::default()'s initial state) into
+        // history, triggering the penalty on this very first tick.
+        agent.tick();
+        assert!(
+            agent.personality.stats().xp <= xp_before,
+            "a blind epoch should not increase xp (before={}, after={})",
+            xp_before,
+            agent.personality.stats().xp
+        );
     }
 
     #[test]

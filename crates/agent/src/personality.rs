@@ -252,6 +252,26 @@ impl Personality {
         &self.config
     }
 
+    /// Restore previously persisted progress (xp/level/handshake+pmkid
+    /// counts/per-AP bond encounters) onto a freshly constructed
+    /// `Personality`, so a device's progression survives a reboot instead
+    /// of resetting to zero every power cycle. See `agent::recovery`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn restore(
+        &mut self,
+        xp: u32,
+        level: u32,
+        handshakes: u32,
+        pmkids: u32,
+        encounters: HashMap<[u8; 6], u32>,
+    ) {
+        self.xp = xp;
+        self.level = level;
+        self.handshakes = handshakes;
+        self.pmkids = pmkids;
+        self.encounters = encounters;
+    }
+
     /// Update on handshake captured
     pub fn update_on_handshake(&mut self, ap_bssid: [u8; 6]) {
         self.handshakes += 1;
@@ -264,6 +284,12 @@ impl Personality {
     /// Number of times a handshake was captured from a given AP.
     pub fn encounters_for(&self, ap_bssid: &[u8; 6]) -> u32 {
         self.encounters.get(ap_bssid).copied().unwrap_or(0)
+    }
+
+    /// All per-AP bond encounter counts, for persistence (see
+    /// `agent::recovery`).
+    pub fn encounters(&self) -> &HashMap<[u8; 6], u32> {
+        &self.encounters
     }
 
     /// Update on new AP seen
@@ -460,6 +486,19 @@ mod tests {
         let p = Personality::default();
         assert_eq!(p.level, 0);
         assert_eq!(p.xp, 0);
+    }
+
+    #[test]
+    fn test_restore_applies_persisted_progress() {
+        let mut p = Personality::default();
+        let mut encounters = HashMap::new();
+        encounters.insert([1, 2, 3, 4, 5, 6], 3u32);
+        p.restore(2500, 2, 7, 1, encounters.clone());
+        assert_eq!(p.xp, 2500);
+        assert_eq!(p.level, 2);
+        assert_eq!(p.handshakes, 7);
+        assert_eq!(p.pmkids, 1);
+        assert_eq!(p.encounters_for(&[1, 2, 3, 4, 5, 6]), 3);
     }
 
     #[test]

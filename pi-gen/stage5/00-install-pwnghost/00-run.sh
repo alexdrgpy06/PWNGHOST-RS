@@ -151,7 +151,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/etc/pwnghost /var/log/pwnghost /var/tmp/pwnghost /run/pwnghost
+ReadWritePaths=/etc/pwnghost /var/log/pwnghost /var/tmp/pwnghost /var/lib/pwnghost /run/pwnghost
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_SYS_RESOURCE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
