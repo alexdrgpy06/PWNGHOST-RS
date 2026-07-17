@@ -1,0 +1,21 @@
+[package]
+name = "ui-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+pwncore.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tera.workspace = true
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+
+[dev-dependencies]
+tempfile.workspace = true

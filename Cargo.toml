@@ -1,0 +1,82 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fw-patcher",
+    "crates/angryoxide",
+    "crates/pwncore",
+    "crates/config",
+    "crates/agent",
+    "crates/pwnagotchi-rs",
+    "crates/rl-agent",
+    "crates/radio",
+    "crates/ui/display",
+    "crates/ui/web",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["pwnagotchi-rs contributors"]
+repository = "https://github.com/yourusername/pwnagotchi-rs"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.40", features = ["full", "rt-multi-thread", "macros", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+figment = { version = "0.10", features = ["toml"] }
+chrono = { version = "0.4", features = ["serde"] }
+mac-addr = { version = "0.3", features = ["serde"] }
+uuid = { version = "1.8", features = ["v4", "serde"] }
+
+# Embedded/Display
+embedded-graphics = "0.8"
+ssd1306 = { version = "0.9", features = ["graphics"] }
+embassy-time = "0.4"
+embassy-sync = "0.4"
+rppal = "0.15"
+
+# HTTP/Web
+axum = { version = "0.7", features = ["ws", "json", "multipart"] }
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+tera = "1.19"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+
+# Lua
+mlua = { version = "0.10", features = ["lua54", "vendored", "async", "send"] }
+
+# Crypto/Hashing
+sha2 = "0.10"
+hex = "0.4"
+
+# Binary data
+bytes = "1.6"
+
+# Testing
+proptest = "1.0"
+tempfile = "3.0"
+futures = "0.3"
+tokio-test = "0.4"
+rand = "0.8"
+
+# ARM targets
+goblin = "0.7"  # for ELF parsing if needed
+
+# Workspace crate dependencies
+fw-patcher = { path = "crates/fw-patcher" }
+angryoxide = { path = "crates/angryoxide" }
+pwncore = { path = "crates/pwncore" }
+config = { path = "crates/config" }
+agent = { path = "crates/agent" }
+rl-agent = { path = "crates/rl-agent" }
+radio = { path = "crates/radio" }
+ui-display = { path = "crates/ui/display" }
+ui-web = { path = "crates/ui/web" }

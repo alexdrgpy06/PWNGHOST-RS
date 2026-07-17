@@ -1,0 +1,23 @@
+# pi-gen configuration for pwnagotchi-rs
+# Target: Raspberry Pi OS Bookworm (32-bit armhf) for Pi Zero W / Pi Zero 2W
+
+IMG_NAME="pwnagotchi-rs"
+RELEASE="bookworm"
+TARGET_HOSTNAME="pwnagotchi"
+USERNAME="pi"
+PASSWORD="raspberry"
+FIRST_USER_NAME="pi"
+FIRST_USER_PASS="raspberry"
+WPA_ESSID=""
+WPA_PASSWORD=""
+WPA_COUNTRY="US"
+ENABLE_SSH=1
+PUBKEY_SSH_FIRST_USER=""
+STAGE_LIST="stage2 stage3 stage4 stage5"
+DEPLOY_ZIP=1
+DEPLOY_COMPRESSION="xz"
+LOCALE_DEFAULT="en_US.UTF-8"
+KEYBOARD_KEYMAP="us"
+KEYBOARD_LAYOUT="English (US)"
+TIMEZONE_DEFAULT="UTC"
+CLEAN=1

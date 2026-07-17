@@ -1,0 +1,29 @@
+[main]
+name = "pwnagotchi"
+lang = "en"
+whitelist = []
+
+[personality]
+aggressive = false
+recon_time = 30
+hop_recon_time = 10
+min_recon_time = 5
+max_interactions = 10
+deauth = true
+
+[ui]
+[ui.display]
+enabled = true
+r#type = "waveshare_4"
+
+[ui.web]
+enabled = true
+port = 8080
+
+[plugins]
+[plugins.pisugarx]
+enabled = true
+i2c_bus = 1
+i2c_addr = 54  # 0x36
+show_on_screen = true
+report_interval = 60

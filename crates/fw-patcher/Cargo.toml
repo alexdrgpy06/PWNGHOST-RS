@@ -1,0 +1,32 @@
+[package]
+name = "fw-patcher"
+version = "0.1.0"
+edition = "2021"
+description = "BCM43436B0 firmware patcher (CoderFX 8-layer stability patches)"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/yourusername/pwnagotchi-rs"
+authors = ["pwnagotchi-rs contributors"]
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["fs", "process", "time", "signal"] }
+figment = { workspace = true }
+tempfile = { workspace = true }
+rppal = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rppal = { workspace = true }
+
+[features]
+default = ["keepalive-armv6", "keepalive-armv7"]
+keepalive-armv6 = []
+keepalive-armv7 = []
+
+[build-dependencies]
+embed-resource = "1.8"

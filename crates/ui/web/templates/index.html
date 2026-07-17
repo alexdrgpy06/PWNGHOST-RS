@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head><title>pwnagotchi-rs</title></head>
+<body>
+<h1>pwnagotchi-rs</h1>
+<div id="face">(◕‿‿◕)</div>
+<div id="stats">Loading...</div>
+<script>
+const ws = new WebSocket('ws://' + location.host + '/ws');
+ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.face) document.getElementById('face').textContent = data.face;
+};
+fetch('/api/session').then(r => r.json()).then(d => {
+    document.getElementById('stats').innerHTML = 
+        'Epoch: ' + d.epoch + ' | Channel: ' + d.channel + ' | Mood: ' + d.mood;
+});
+</script>
+</body>
+</html>
