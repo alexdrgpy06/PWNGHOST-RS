@@ -49,6 +49,20 @@ jobs:
         with:
           platforms: arm
 
+      # A real 50-minute CI run got all the way through the nexmon firmware
+      # build (hundreds of qemu-emulated armhf gcc invocations inside the
+      # chroot, all fine) and most of stage5, then failed on a later
+      # `systemctl enable` inside the same chroot with "qemu-arm: Could not
+      # open '/lib/ld-linux-armhf.so.3'". This exact error/context (qemu
+      # emulation nested inside a chroot during a pi-gen-style build) is a
+      # well-documented symptom of binfmt registration missing the
+      # persistent "F" (fix binary) flag, which setup-qemu-action doesn't
+      # guarantee if the runner already has some other qemu registration
+      # present. Force a clean reset + persistent registration explicitly.
+      - name: Reset QEMU binfmt registration with persistent (F) flag
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.board == '' || github.event.inputs.board == matrix.board }}
+        run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
       - name: Build Docker image for pi-gen
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.board == '' || github.event.inputs.board == matrix.board }}
         run: |
