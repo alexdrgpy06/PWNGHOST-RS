@@ -16,33 +16,22 @@ install -d -m 755 \
     "${ROOTFS_DIR}/var/lib/pwnghost/log" \
     "${ROOTFS_DIR}/var/lib/pwnghost/data"
 
-# DIAGNOSTIC (temporary): two real CI runs have failed here with
-# "qemu-arm[-static]: Could not open '/lib/ld-linux-armhf.so.3'" -- the
-# exact same failure survived switching qemu's binfmt registration from
-# dynamic (qemu-arm) to static (qemu-arm-static), which rules out a qemu/
-# binfmt-registration cause (a static interpreter needs no shared libs of
-# its own) and points at the *target* rootfs's own /lib actually missing
-# the file at this exact point, despite on_chroot (which itself needs this
-# same interpreter just to start bash) working fine one substage earlier
-# in 00-install-pwnghost. Capture hard evidence instead of guessing again.
-echo "=== pwnghost-rs diagnostic: state of ${ROOTFS_DIR} before overlay rsync ==="
-ls -la "${ROOTFS_DIR}/lib/ld-linux-armhf.so.3" 2>&1 || echo "MISSING before rsync"
-readlink -f "${ROOTFS_DIR}/lib/ld-linux-armhf.so.3" 2>&1 || true
-ls -la "${ROOTFS_DIR}/lib/arm-linux-gnueabihf/" 2>&1 | head -5 || true
-mount | grep "$(realpath "${ROOTFS_DIR}")" 2>&1 || echo "no active mounts under ROOTFS_DIR"
-echo "=== end diagnostic (pre-rsync) ==="
-
 # Copy the whole overlay (etc/, usr/, lib/) into the rootfs.
-rsync -a files/ "${ROOTFS_DIR}/"
-
-echo "=== pwnghost-rs diagnostic: state of ${ROOTFS_DIR} after overlay rsync ==="
-ls -la "${ROOTFS_DIR}/lib/ld-linux-armhf.so.3" 2>&1 || echo "MISSING after rsync"
-echo "=== end diagnostic (post-rsync) ==="
-on_chroot << 'CANARY'
-echo "chroot-canary: pwd=$(pwd) whoami=$(whoami) uname=$(uname -m)"
-ls -la /lib/ld-linux-armhf.so.3 2>&1 || echo "chroot-canary: MISSING from inside chroot"
-echo "chroot-canary: ok"
-CANARY
+#
+# --keep-dirlinks (-K) is required here: this bookworm rootfs is usrmerged
+# (${ROOTFS_DIR}/lib is a symlink to usr/lib), but the overlay's own source
+# tree has a real directory at files/lib/ (for
+# lib/systemd/system-shutdown/safe-shutdown.sh). Without -K, rsync's
+# default behavior when the source has a real directory where the
+# destination has a symlink is to DELETE the destination symlink and
+# create a real directory in its place -- which replaced the entire
+# /lib -> usr/lib symlink with a new, nearly-empty directory containing
+# only the one path this overlay ships, destroying access to everything
+# else that used to live there (confirmed the hard way: this took out
+# /lib/ld-linux-armhf.so.3, the armhf dynamic linker itself, breaking
+# every subsequent qemu-emulated exec in the chroot). -K tells rsync to
+# follow the existing symlink instead of replacing it.
+rsync -a -K files/ "${ROOTFS_DIR}/"
 
 chmod 755 "${ROOTFS_DIR}"/usr/local/bin/*.sh 2>/dev/null || true
 chmod 755 "${ROOTFS_DIR}/usr/local/bin/bt-pan-connect"
