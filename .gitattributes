@@ -1,0 +1,21 @@
+# This repo is edited from Windows but ships shell scripts that get run
+# unmodified inside Linux containers/chroots (pi-gen). core.autocrlf on a
+# Windows checkout will otherwise silently convert them to CRLF, which
+# breaks bash parsing ("syntax error near unexpected token") -- confirmed
+# locally the hard way. Force LF regardless of platform for anything that's
+# actually interpreted.
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+
+# Binary/generated -- never touch line endings.
+*.png binary
+*.pgp binary
+*.hcd binary
+*.img binary
+*.xz binary
+*.gz binary

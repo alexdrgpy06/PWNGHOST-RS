@@ -9,13 +9,27 @@ FROM debian:bookworm-slim
 # CI failure).
 RUN dpkg --add-architecture armhf
 
-# Install pi-gen dependencies
+# Install pi-gen dependencies. This list is meant to satisfy
+# pi-gen/scripts/dependencies_check against pi-gen/depends -- it was hand-
+# assembled by guesswork rather than derived from that file, and a real
+# build.sh run surfaced 9 genuinely missing tools: quilt, qemu-user-binfmt,
+# debootstrap, zerofree, zip, xxd, kmod, bc, arch-test.
+#
+# qemu-user-static is deliberately NOT installed: pi-gen/depends wants the
+# `qemu-arm` binary from qemu-user-binfmt (this vendored pi-gen uses
+# binfmt_misc's persistent-interpreter registration rather than copying a
+# static qemu binary into the target rootfs), and the two packages Conflict:
+# at the dpkg level -- confirmed by a real `apt-get install` failure
+# ("you have held broken packages") when both were listed.
 RUN apt-get update && apt-get install -y \
+    arch-test \
+    bc \
     binfmt-support \
     btrfs-progs \
     coreutils \
     cpio \
     curl \
+    debootstrap \
     dosfstools \
     e2fsprogs \
     fdisk \
@@ -24,6 +38,7 @@ RUN apt-get update && apt-get install -y \
     git \
     grep \
     gzip \
+    kmod \
     kpartx \
     libarchive-tools \
     libcap2-bin \
@@ -39,7 +54,8 @@ RUN apt-get update && apt-get install -y \
     python3-pexpect \
     python3-psutil \
     python3-yaml \
-    qemu-user-static \
+    qemu-user-binfmt \
+    quilt \
     rsync \
     sed \
     sudo \
@@ -48,7 +64,10 @@ RUN apt-get update && apt-get install -y \
     unzip \
     util-linux \
     wget \
+    xxd \
     xz-utils \
+    zerofree \
+    zip \
     # Build tools for cross-compilation
     build-essential \
     gcc-arm-linux-gnueabihf \

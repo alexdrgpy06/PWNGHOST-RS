@@ -38,6 +38,17 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.board == '' || github.event.inputs.board == matrix.board }}
         uses: docker/setup-buildx-action@v3
 
+      # pi-gen's own dependencies_check requires binfmt_misc to be mounted
+      # (needed for qemu-user-binfmt to run armhf binaries during the
+      # debootstrap/chroot build) -- don't rely on the runner having it
+      # preloaded, register it explicitly. Confirmed missing on at least
+      # one local Docker environment even with --privileged.
+      - name: Set up QEMU (binfmt_misc for armhf)
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.board == '' || github.event.inputs.board == matrix.board }}
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+
       - name: Build Docker image for pi-gen
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.board == '' || github.event.inputs.board == matrix.board }}
         run: |
