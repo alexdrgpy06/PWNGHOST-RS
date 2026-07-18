@@ -126,6 +126,71 @@ considered incomplete/"token" ports by comparison. Our real e-ink SPI/GPIO Rust 
 actually run (jayofelony's fork). The open item is enriching the RL reward function per the
 weighted formula above — tracked, not urgent, not a fidelity gap serious enough to block release.
 
+### oxigotchi Deep-Dive: Build Steps, Content, and Logic (2026-07-18)
+
+A closer look at CoderFX/oxigotchi specifically (our nearest sibling — also a from-scratch Rust
+reimplementation), covering how it's built, what it contains, and whether its logic reveals gaps.
+
+**Build process is fundamentally different from ours, and less rigorous.** oxigotchi has no
+pi-gen-style declarative build: `tools/build_image.py` SSHs into an already hand-configured, live
+Pi over the USB gadget link, strips personal data (bash history, SSH keys, logs), `dd`s the SD
+card block device back over SSH, then shrinks with PiShrink and gzips. `tools/bake_release.sh`
+does a second pass (loop-mount, strip the ext4 journal, `zerofree`, re-create the journal, shrink,
+zip). `tools/bake_v2.sh` is a more declarative loopback-mount rebuild ("20 build steps"), but still
+starts from a pre-existing base image, not a from-scratch OS bootstrap. Our pi-gen stage-based,
+git-versioned, CI-reproducible build (anyone can rebuild the exact same image from a clean
+checkout) is meaningfully more rigorous than any of oxigotchi's three build paths — this is a
+validated architectural choice, not something to change.
+
+**USB-gadget networking: they let NetworkManager own it; we deliberately don't — and that's the
+likely reason RNDIS isn't enumerating for us on Windows right now.** Both projects use the
+identical kernel-level setup (`dtoverlay=dwc2` + `cmdline.txt modules-load=dwc2,g_ether`). But
+oxigotchi assigns `usb0` a real NetworkManager connection profile (dual static IPs `10.0.0.2/24` +
+`192.168.137.2/24` for Windows ICS fallback) with a `usb0-fallback.service` systemd oneshot as a
+last resort only if NM fails; they explicitly disable Raspberry Pi OS's own `rpi-usb-gadget-ics`
+helper service due to log spam, but still let NM itself manage the interface. We do the opposite:
+`pi-gen/stage5/.../99-unmanage-usb0.conf` tells NetworkManager to leave `usb0` alone entirely, and
+a bespoke systemd service (`usb-net.service` + `usb-net-setup.sh`) does `ip addr add` + `dnsmasq`
+by hand. Since `rpi-usb-gadget-ics` is Raspberry Pi OS's first-party, vendor-supported mechanism
+for exactly this scenario, bypassing NetworkManager entirely (as we do) is the more likely
+explanation for why no RNDIS/network function is enumerating on Windows in current hardware
+testing (see below) — tracked as the leading hypothesis, not yet fixed. **Even when their gadget
+does enumerate correctly**, oxigotchi still ships `tools/setup_rndis_ip.ps1`, a companion
+PowerShell script users run on the Windows side to force a static IP onto the RNDIS adapter —
+confirming DHCP-from-the-Pi alone isn't reliably sufficient on Windows in practice. We have no
+Windows-side companion script at all; worth adding regardless of the NM fix.
+
+**Other real, concrete gaps worth closing** (found via a full source read of a fresh oxigotchi
+clone, cross-referenced against our own crates):
+
+- **BT/WiFi coexistence**: oxigotchi's `bluetooth/coex.rs` "contention score" is actually dead code
+  (instantiated, `apply()` never called) — pure dashboard cosmetics, not a gap for us. The *real*
+  coexistence primitive is `wifi::pause_for_bt`/`resume_from_pause` (`wifi/mod.rs`): a lightweight
+  ~10s pause (stop AO, bring `wlan0mon` down without a full radio-mode teardown) used specifically
+  during BT device-discovery/pairing scans, layered on top of their full mutual-exclusion
+  `radio.rs` lock file. Our `crates/radio::RadioManager` only supports full atomic
+  teardown/bringup between top-level modes (RAGE/BT/SAFE) and has no lightweight "pause WiFi
+  briefly for a BT scan" primitive, and no ad-hoc BT-discovery path (BT mode currently requires a
+  pre-known `bt_address`). **Worth porting**: the pause/resume-for-BT-scan pattern, to support
+  interactive phone pairing without a full mode switch.
+- **QPU/GPU RF subsystem**: real, wired-in code (`qpu/` + `gpu/`, ~2.9K lines, gated behind
+  `config.qpu.enabled`, default off) that maps VideoCore V3D registers directly via `/dev/mem` at
+  a `BCM2837`-specific base address to GPU-accelerate WiFi frame classification. Explicitly
+  BCM2837-only (Pi Zero 2W's SoC; wrong base address for Pi Zero W's BCM2835), fragile (raw
+  `/dev/mem` pokes), and solves a workload (classifying a few hundred frames/sec) that doesn't
+  need GPU offload on either of our target SoCs. **Not worth porting.**
+- **Personality face variety**: oxigotchi's `personality/variety.rs` adds a priority-ordered face
+  engine on top of the base mood system — capture milestones (1/10/25/50/100 get unique faces),
+  idle rotation, time-of-day faces, and a 12% rare-face roll — layered on the same mood/XP core we
+  already have. Hardware-independent, cheap, genuine personality-richness win. **Worth adopting.**
+- **Config migration**: comparable to our `config::migrate`; oxigotchi additionally does
+  capture-directory dedup-import and generates systemd units at runtime (we do unit provisioning
+  at image-build time via pi-gen instead — a valid, not-a-gap architectural difference). Minor,
+  low-priority gap: capture-directory dedup-import on migration.
+
+None of this changes release readiness; the two "worth adopting/porting" items (BT-scan pause
+primitive, personality face variety) are tracked as future enhancements, not blockers.
+
 ---
 
 ## Tech Stack
