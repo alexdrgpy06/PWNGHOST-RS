@@ -1,0 +1,41 @@
+# NetworkManager connection profile for the USB-ethernet gadget (usb0),
+# created by the g_ether kernel module (dtoverlay=dwc2 + cmdline.txt
+# modules-load=dwc2,g_ether -- see stage1/00-boot-files).
+#
+# Earlier revisions of this image told NetworkManager to ignore usb0
+# entirely (a conf.d unmanaged-devices rule) and brought the interface up
+# by hand via usb-net.service + dnsmasq. That diverged from the
+# Raspberry Pi OS-native way of doing USB gadget networking: bookworm's own
+# raspberrypi-net-mods package (rpi-usb-gadget-ics) assumes NetworkManager
+# owns the gadget interface via a real connection profile, and a fresh
+# audit of oxigotchi (a sibling Rust reimplementation that has this working
+# on real hardware) confirmed they let NM manage usb0 the same way. Letting
+# NM own it here instead -- ipv4.method=shared makes NM itself run the
+# DHCP server (via its internal dnsmasq) and NAT/forwarding setup, so a
+# connected host (Windows RNDIS, Linux/Mac CDC-ECM) gets a real DHCP lease
+# rather than depending on us guessing whether the host will pick up a
+# hand-rolled static address. usb-net.service is kept as a fallback-only
+# safety net (see usb-net-setup.sh) in case NM fails to bring the profile
+# up for any reason.
+#
+# NetworkManager requires connection files to be mode 600 owned by root or
+# it silently ignores them -- see the chmod in
+# stage5/01-runtime-overlay/00-run.sh.
+[connection]
+id=usb0
+uuid=8f2b8c1a-8b1e-4b0a-9e7a-000000000001
+type=ethernet
+interface-name=usb0
+autoconnect=true
+autoconnect-priority=-10
+
+[ethernet]
+
+[ipv4]
+method=shared
+address1=10.0.0.2/24
+
+[ipv6]
+method=ignore
+
+[proxy]

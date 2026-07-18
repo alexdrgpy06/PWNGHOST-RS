@@ -55,6 +55,31 @@ pub async fn set_monitor_mode(iface: &str, enable: bool) -> Result<()> {
     Ok(())
 }
 
+/// Bring a monitor-mode interface link up/down WITHOUT changing its `iw`
+/// device type (unlike [`set_monitor_mode`], which tears down monitor mode
+/// entirely and switches back to `managed`).
+///
+/// This is the lightweight pause primitive used for a brief BT scan/pairing
+/// window on chips that share one radio between WiFi and BT (BCM43436B0):
+/// AO stops, the monitor interface goes link-down for the scan's duration,
+/// then link-up again -- monitor mode itself is never torn down, so
+/// resuming is just bringing the link back up, no `iw ... set type
+/// monitor` re-negotiation with the driver. Ported from oxigotchi's
+/// `wifi::pause_for_bt`/`resume_from_pause` (confirmed via a fresh audit of
+/// their `rust/src/wifi.rs`, 2026-07-18), which uses the identical
+/// down/up-only approach specifically to avoid a full radio-mode
+/// transition on every BT device-discovery scan.
+pub async fn set_link_state(iface: &str, up: bool) -> Result<()> {
+    let action = if up { "up" } else { "down" };
+    info!("Setting {} link {}", iface, action);
+    Command::new("ip")
+        .args(["link", "set", iface, action])
+        .status()
+        .await
+        .with_context(|| format!("Failed to bring {iface} link {action}"))?;
+    Ok(())
+}
+
 /// Get monitor interface name
 pub fn monitor_interface(iface: &str) -> String {
     if iface.ends_with("mon") {

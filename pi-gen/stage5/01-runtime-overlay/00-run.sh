@@ -38,6 +38,12 @@ chmod 755 "${ROOTFS_DIR}/usr/local/bin/bt-pan-connect"
 chmod 755 "${ROOTFS_DIR}/usr/local/bin/bt-pan-disconnect"
 chmod 755 "${ROOTFS_DIR}/lib/systemd/system-shutdown/safe-shutdown.sh"
 
+# NetworkManager silently ignores connection profiles that aren't mode 600
+# owned by root -- rsync from a Windows/NTFS checkout carries no reliable
+# Unix permission bits, so this must be set explicitly at build time.
+chmod 600 "${ROOTFS_DIR}/etc/NetworkManager/system-connections/usb0.nmconnection"
+chown root:root "${ROOTFS_DIR}/etc/NetworkManager/system-connections/usb0.nmconnection"
+
 # logrotate for the on-zram logs.
 install -d -m 755 "${ROOTFS_DIR}/etc/logrotate.d"
 cat > "${ROOTFS_DIR}/etc/logrotate.d/pwnghost-rs" << 'EOF'

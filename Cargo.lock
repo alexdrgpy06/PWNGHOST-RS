@@ -1979,6 +1979,7 @@ dependencies = [
  "rand 0.8.7",
  "safetensors",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -2260,7 +2261,6 @@ dependencies = [
  "display-interface-spi",
  "embedded-graphics-core",
  "embedded-hal",
- "embedded-hal-async",
  "maybe-async-cfg",
 ]
 

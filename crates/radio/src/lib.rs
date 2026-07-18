@@ -31,6 +31,11 @@ pub struct RadioManager {
     interface: String,
     /// When true, hardware bring-up/teardown is skipped (for tests / dry runs).
     mock: bool,
+    /// Set while a lightweight BT-scan pause (see [`RadioManager::pause_for_bt_scan`])
+    /// has the monitor interface link-down. Distinct from `state`/`mode`,
+    /// which keep reporting the real active mode throughout the pause --
+    /// this is not a mode transition, just a brief radio-sharing courtesy.
+    paused_for_bt: bool,
 }
 
 impl RadioManager {
@@ -40,6 +45,7 @@ impl RadioManager {
             state: RadioState::Idle,
             interface,
             mock: false,
+            paused_for_bt: false,
         }
     }
 
@@ -50,6 +56,7 @@ impl RadioManager {
             state: RadioState::Idle,
             interface,
             mock: true,
+            paused_for_bt: false,
         }
     }
 
@@ -75,6 +82,8 @@ impl RadioManager {
         let from = self.mode;
         self.state = RadioState::Transitioning { from, to: mode };
         self.mode = mode;
+        // A full mode transition supersedes any lightweight BT-scan pause.
+        self.paused_for_bt = false;
 
         // Teardown current mode
         if !self.mock {
@@ -153,6 +162,48 @@ impl RadioManager {
         }
         self.mode = RadioMode::Rage;
         self.state = RadioState::Idle;
+        self.paused_for_bt = false;
+    }
+
+    /// Briefly quiesce the WiFi radio for a BT device-discovery/pairing scan,
+    /// without doing a full RAGE<->BT mode transition. Only meaningful in
+    /// RAGE mode (monitor interface active); a no-op everywhere else, since
+    /// BT mode already owns the radio and SAFE mode's managed wlan0 doesn't
+    /// contend with BT scanning the way monitor-mode TX/RX does.
+    ///
+    /// Ported from oxigotchi's `wifi::pause_for_bt` (see `radio::wifi::set_link_state`
+    /// doc comment) -- the caller is expected to stop AO before calling this
+    /// and restart it after [`RadioManager::resume_from_bt_scan`].
+    pub async fn pause_for_bt_scan(&mut self) -> Result<()> {
+        if self.mode != RadioMode::Rage || !matches!(self.state, RadioState::Active(RadioMode::Rage))
+        {
+            return Ok(());
+        }
+        if self.paused_for_bt {
+            return Ok(());
+        }
+        if !self.mock {
+            crate::wifi::set_link_state(&self.interface, false).await?;
+        }
+        self.paused_for_bt = true;
+        Ok(())
+    }
+
+    /// Resume the WiFi radio after [`RadioManager::pause_for_bt_scan`]. A
+    /// no-op if no pause is active.
+    pub async fn resume_from_bt_scan(&mut self) -> Result<()> {
+        if !self.paused_for_bt {
+            return Ok(());
+        }
+        if !self.mock {
+            crate::wifi::set_link_state(&self.interface, true).await?;
+        }
+        self.paused_for_bt = false;
+        Ok(())
+    }
+
+    pub fn is_paused_for_bt(&self) -> bool {
+        self.paused_for_bt
     }
 }
 
@@ -323,5 +374,71 @@ mod tests {
         assert!(!mgr.is_transitioning());
         let _ = mgr.switch_to(RadioMode::Rage, None, None, None, None).await;
         assert!(!mgr.is_transitioning());
+    }
+
+    #[tokio::test]
+    async fn test_pause_and_resume_for_bt_scan_in_rage_mode() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
+        mgr.switch_to(RadioMode::Rage, None, None, None, None)
+            .await
+            .unwrap();
+        assert!(!mgr.is_paused_for_bt());
+
+        mgr.pause_for_bt_scan().await.unwrap();
+        assert!(mgr.is_paused_for_bt());
+        // Mode/state still report RAGE active -- this isn't a mode transition.
+        assert_eq!(mgr.current_mode(), RadioMode::Rage);
+        assert_eq!(mgr.state(), &RadioState::Active(RadioMode::Rage));
+
+        mgr.resume_from_bt_scan().await.unwrap();
+        assert!(!mgr.is_paused_for_bt());
+    }
+
+    #[tokio::test]
+    async fn test_pause_for_bt_scan_is_noop_outside_rage_mode() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
+        mgr.switch_to(
+            RadioMode::Bt,
+            Some("00:11:22:33:44:55"),
+            Some("bcm43436b0"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        mgr.pause_for_bt_scan().await.unwrap();
+        assert!(!mgr.is_paused_for_bt());
+    }
+
+    #[tokio::test]
+    async fn test_resume_without_pause_is_noop() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
+        mgr.switch_to(RadioMode::Rage, None, None, None, None)
+            .await
+            .unwrap();
+        assert!(mgr.resume_from_bt_scan().await.is_ok());
+        assert!(!mgr.is_paused_for_bt());
+    }
+
+    #[tokio::test]
+    async fn test_full_mode_switch_clears_pause_flag() {
+        let mut mgr = RadioManager::mock("wlan0".to_string());
+        mgr.switch_to(RadioMode::Rage, None, None, None, None)
+            .await
+            .unwrap();
+        mgr.pause_for_bt_scan().await.unwrap();
+        assert!(mgr.is_paused_for_bt());
+
+        mgr.switch_to(
+            RadioMode::Bt,
+            Some("00:11:22:33:44:55"),
+            Some("bcm43436b0"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!mgr.is_paused_for_bt());
     }
 }
