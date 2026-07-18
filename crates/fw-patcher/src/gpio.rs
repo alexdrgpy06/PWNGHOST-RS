@@ -23,8 +23,17 @@
 
 use anyhow::Result;
 
-/// GPIO pin for WL_REG_ON on Pi Zero 2W (GPIO 22, same as Pi 3B+)
-pub const WL_REG_ON_PIN: u8 = 22;
+/// GPIO pin for WL_REG_ON on Pi Zero 2W (BCM43436B0).
+///
+/// GPIO 41, not 22 -- corrected from an earlier "same as Pi 3B+" assumption
+/// after a fresh audit of oxigotchi's actual field-tested recovery scripts
+/// (`tools/wifi-recovery.sh`, `tools/wifi-watchdog.sh`, both use
+/// `pinctrl set 41 op dl/dh` against this exact chip/board combination,
+/// 2026-07-18). Per the module-level DANGER note, this pin is never
+/// toggled automatically either way -- but a wrong constant here would be
+/// a silent landmine for the manual/diagnostic path this module exists
+/// for, toggling the wrong line instead of doing nothing or erroring.
+pub const WL_REG_ON_PIN: u8 = 41;
 
 /// Default pulse duration for power cycle (ms)
 pub const DEFAULT_PULSE_MS: u64 = 100;
@@ -151,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_gpio_constants() {
-        assert_eq!(WL_REG_ON_PIN, 22);
+        assert_eq!(WL_REG_ON_PIN, 41);
         assert_eq!(DEFAULT_PULSE_MS, 100);
     }
 }

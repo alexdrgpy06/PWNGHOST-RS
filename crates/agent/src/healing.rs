@@ -52,7 +52,7 @@ impl Default for HealingConfig {
         Self {
             crash_window_seconds: 300,
             crash_threshold: 3,
-            gpio_cycle_pin: 22,
+            gpio_cycle_pin: 41,
             gpio_cycle_duration_ms: 100,
             max_ao_backoff_attempts: 5,
         }
@@ -393,7 +393,7 @@ mod tests {
         let cfg = HealingConfig::default();
         assert_eq!(cfg.crash_window_seconds, 300);
         assert_eq!(cfg.crash_threshold, 3);
-        assert_eq!(cfg.gpio_cycle_pin, 22);
+        assert_eq!(cfg.gpio_cycle_pin, 41);
         assert_eq!(cfg.gpio_cycle_duration_ms, 100);
         assert_eq!(cfg.max_ao_backoff_attempts, 5);
     }

@@ -62,7 +62,7 @@ on_chroot << EOF
 set +e
 for unit in usb-gadget-setup.service usb-net.service wifi-country.service zram-log.service \
             zram-data.service rsync-zram.timer buffer-cleaner.timer bt-agent.service \
-            nm-watchdog.service safe-shutdown.service; do
+            nm-watchdog.service safe-shutdown.service bootlog.service; do
     systemctl enable "\$unit" && echo "enabled \$unit" || echo "pwnghost-rs: could not enable \$unit (continuing)"
 done
 systemctl enable NetworkManager.service 2>/dev/null || true
