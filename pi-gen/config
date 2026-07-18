@@ -46,8 +46,14 @@ export IMG_NAME="${IMG_NAME:-pwnghost-rs-${PWNGHOST_BOARD}}"
 export DEPLOY_COMPRESSION="xz"
 
 export TARGET_HOSTNAME="pwnghost"
-export FIRST_USER_NAME="pwn"
-export FIRST_USER_PASS="pwnagotchi"
+# Matches jayofelony/pwnagotchi's actual default login (verified by reading
+# their cloud-init user-data file) rather than a custom scheme, for
+# drop-in-replacement fidelity -- real pwnagotchi users expect pi/raspberry.
+# Unlike that reference image, sudo here still requires the password (see
+# stage2/04-pwnghost-base's note) since there's no first-boot wizard
+# prompting a password change.
+export FIRST_USER_NAME="pi"
+export FIRST_USER_PASS="raspberry"
 # We ship a fixed default user/password for a headless SD-card image (like
 # upstream pwnagotchi images); skip pi-gen's interactive first-boot rename.
 export DISABLE_FIRST_BOOT_USER_RENAME=1

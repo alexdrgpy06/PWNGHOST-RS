@@ -4,19 +4,22 @@
 # stage2/01-sys-tweaks (vendored from upstream pi-gen) already created
 # FIRST_USER_NAME with adduser, set its password, and added it to the usual
 # hardware-access groups (plugdev, video, i2c, spi, gpio, input, ...). This
-# stage only adds what's specific to PWNGHOST-RS: passwordless sudo and the
-# runtime packages the daemon / overlay scripts need that aren't already
-# pulled in by the upstream Raspberry Pi OS Lite package set.
+# stage only adds what's specific to PWNGHOST-RS: the runtime packages the
+# daemon / overlay scripts need that aren't already pulled in by the
+# upstream Raspberry Pi OS Lite package set.
+#
+# NOTE: this used to also grant FIRST_USER_NAME passwordless sudo, matching
+# jayofelony/pwnagotchi's actual default (verified by reading their
+# stage3/07-patches/files/user-data cloud-init file). Deliberately dropped:
+# the default credentials now match that convention (pi/raspberry, for
+# drop-in-replacement fidelity), but sudo still requires the password as a
+# real security improvement over the reference image, since there's no
+# longer an interactive first-boot wizard prompting the user to change it.
 
 on_chroot << EOF
 set -e
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-
-# Passwordless sudo for the first user (headless device, no interactive
-# first-boot wizard - DISABLE_FIRST_BOOT_USER_RENAME=1 in pi-gen/config).
-echo "${FIRST_USER_NAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/010_pwn-nopasswd
-chmod 440 /etc/sudoers.d/010_pwn-nopasswd
 
 # Runtime packages required by pwnghost-rs / the runtime overlay (stage5)
 # that aren't already covered by upstream stage2 packages.
@@ -117,7 +120,7 @@ cat << BANNER
   Progress:  cat /var/lib/pwnghost/recovery.json
   Config:    /etc/pwnghost/config.toml
 
-  Default login is pwn/pwnagotchi -- change it once you've confirmed
+  Default login is pi/raspberry -- change it once you've confirmed
   everything works (passwd).
 
 BANNER
