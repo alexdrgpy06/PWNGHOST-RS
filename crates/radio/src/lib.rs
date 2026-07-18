@@ -175,7 +175,8 @@ impl RadioManager {
     /// doc comment) -- the caller is expected to stop AO before calling this
     /// and restart it after [`RadioManager::resume_from_bt_scan`].
     pub async fn pause_for_bt_scan(&mut self) -> Result<()> {
-        if self.mode != RadioMode::Rage || !matches!(self.state, RadioState::Active(RadioMode::Rage))
+        if self.mode != RadioMode::Rage
+            || !matches!(self.state, RadioState::Active(RadioMode::Rage))
         {
             return Ok(());
         }
