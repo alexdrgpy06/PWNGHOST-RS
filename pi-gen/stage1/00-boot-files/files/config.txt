@@ -12,8 +12,18 @@ dtparam=audio=on
 
 # --- PWNGHOST-RS ---
 # USB gadget mode (device mode) so the Pi Zero / Zero 2W can present a USB
-# ethernet adapter (g_ether, loaded via cmdline.txt modules-load) for a
-# tethered SSH lifeline over the micro-USB "USB" (not "PWR") port.
+# gadget for a tethered SSH lifeline over the micro-USB "USB" (not "PWR")
+# port. dwc2 alone (loaded via cmdline.txt modules-load) puts the
+# controller in device mode; the actual gadget composition (RNDIS network
+# function + ACM serial console) is built via configfs at boot by
+# usb-gadget-setup.service (see stage5/01-runtime-overlay), not the legacy
+# g_ether kernel module -- g_ether's default composition has no Microsoft
+# OS descriptor, so Windows has no inbox driver for its network function
+# and only the accidental ACM half ever enumerates usably. Building the
+# gadget by hand lets us tag the RNDIS function with the OS descriptor
+# Windows needs to bind its native "Remote NDIS Compatible Device" driver
+# with no manual driver install, matching how pwnagotchi's original USB
+# gadget setup presents itself.
 dtoverlay=dwc2
 # --- end PWNGHOST-RS ---
 

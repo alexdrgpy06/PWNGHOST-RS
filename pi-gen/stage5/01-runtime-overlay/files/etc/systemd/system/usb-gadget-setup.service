@@ -1,0 +1,14 @@
+[Unit]
+Description=pwnghost-rs USB gadget composition (RNDIS network + ACM serial console) via configfs
+DefaultDependencies=no
+After=local-fs.target sysinit.target
+Before=sysinit.target NetworkManager.service usb-net.service
+Wants=sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/usb-gadget-setup.sh
+
+[Install]
+WantedBy=sysinit.target

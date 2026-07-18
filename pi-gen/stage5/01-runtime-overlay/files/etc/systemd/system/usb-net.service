@@ -1,14 +1,16 @@
 [Unit]
-Description=pwnghost-rs USB gadget (g_ether) fallback static IP + DHCP for tethered SSH
+Description=pwnghost-rs USB gadget fallback static IP + DHCP for tethered SSH
 Documentation=man:nmcli(1)
 # Fallback only: NetworkManager (via usb0.nmconnection) is the primary path
-# for bringing usb0 up. NetworkManager.service is itself WantedBy=
+# for bringing usb0 up, once usb-gadget-setup.service has built the RNDIS
+# function via configfs. NetworkManager.service is itself WantedBy=
 # multi-user.target (not sysinit.target), so this unit targets
 # multi-user.target too -- putting it on sysinit.target (as an earlier
 # revision did, back when this was the *only* mechanism) would order it
 # before NetworkManager even starts, defeating the "detect whether NM
 # already succeeded" check in usb-net-setup.sh.
-After=sys-subsystem-net-devices-usb0.device systemd-modules-load.service NetworkManager.service
+After=usb-gadget-setup.service sys-subsystem-net-devices-usb0.device systemd-modules-load.service NetworkManager.service
+Requires=usb-gadget-setup.service
 Wants=sys-subsystem-net-devices-usb0.device
 
 [Service]
