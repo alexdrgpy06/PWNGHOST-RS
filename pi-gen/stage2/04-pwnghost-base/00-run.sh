@@ -94,3 +94,32 @@ EOF
 cat > "${ROOTFS_DIR}/boot/firmware/country.txt.example" << 'EOF'
 US
 EOF
+
+# --- Login banner ------------------------------------------------------
+# Classic pwnagotchi shows a helpful console banner at login (service
+# status, web UI URL, where to look for logs/progress). This image shipped
+# with none at all -- a bare login prompt with no hint of what's running
+# or how to check on it. Uses Debian's standard update-motd.d mechanism
+# (dynamic, run at login time) so it reflects live state rather than
+# baking in stale info at build time.
+install -d -m 755 "${ROOTFS_DIR}/etc/update-motd.d"
+cat > "${ROOTFS_DIR}/etc/update-motd.d/50-pwnghost-rs" << 'MOTD_EOF'
+#!/bin/bash
+STATUS="$(systemctl is-active pwnghost-rs.service 2>/dev/null || echo unknown)"
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+cat << BANNER
+
+  (◕‿‿◕)  pwnghost-rs
+
+  Service:   ${STATUS}
+  Web UI:    http://${IP:-<device-ip>}:8080/
+  Logs:      journalctl -u pwnghost-rs -f
+  Progress:  cat /var/lib/pwnghost/recovery.json
+  Config:    /etc/pwnghost/config.toml
+
+  Default login is pwn/pwnagotchi -- change it once you've confirmed
+  everything works (passwd).
+
+BANNER
+MOTD_EOF
+chmod 755 "${ROOTFS_DIR}/etc/update-motd.d/50-pwnghost-rs"

@@ -156,8 +156,13 @@ async fn main() -> anyhow::Result<()> {
     // Initialize radio manager
     let mut radio = RadioManager::new(config.main.iface.clone());
 
-    // Initialize display if enabled
-    let display = if config.ui.display.enabled {
+    // Initialize display if enabled. A display/hardware-wiring problem (wrong
+    // SPI path, wrong GPIO chip, a pin that doesn't match the physical HAT)
+    // must never take down the rest of the agent -- WiFi scanning, capture,
+    // healing, and the web UI are all independent of whether the e-ink panel
+    // is working, and a device that's otherwise fully functional shouldn't
+    // crash-loop just because its screen doesn't light up.
+    let mut display = if config.ui.display.enabled {
         let disp_cfg = ui::display::DisplayConfig {
             rotation: match config.ui.display.rotation {
                 90 => ui::display::DisplayRotation::Rotate90,
@@ -170,7 +175,16 @@ async fn main() -> anyhow::Result<()> {
             ),
             ..Default::default()
         };
-        Some(Display::new(disp_cfg)?)
+        match Display::new(disp_cfg) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                error!(
+                    "Failed to construct display driver, continuing without a display: {}",
+                    e
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -274,9 +288,19 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Initialize display
-    if let Some(ref d) = display {
-        d.init().await?;
+    // Initialize display. See the comment above: a real hardware/wiring
+    // failure here (never verified against real silicon -- see
+    // ui::display::hardware's module docs) must disable the display, not
+    // crash the whole agent. Check `journalctl -u pwnghost-rs` for the exact
+    // error if the e-ink panel doesn't light up.
+    if let Some(d) = display.as_ref() {
+        if let Err(e) = d.init().await {
+            error!(
+                "Display hardware init failed, continuing without a display: {}",
+                e
+            );
+            display = None;
+        }
     }
 
     // Main loop
@@ -544,8 +568,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if let Some(d) = display {
-        d.show_shutdown().await?;
-        d.sleep().await?;
+        if let Err(e) = d.show_shutdown().await {
+            warn!("Display show_shutdown failed: {}", e);
+        }
+        if let Err(e) = d.sleep().await {
+            warn!("Display sleep failed: {}", e);
+        }
     }
 
     info!("PWNGHOST-RS stopped");
