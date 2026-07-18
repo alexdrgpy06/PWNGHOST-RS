@@ -60,6 +60,74 @@ That replaces the Python pwnagotchi with a **pure Rust implementation** using **
 
 ---
 
+## Fidelity vs Reference Implementations (Research Findings, 2026-07-18)
+
+Prompted by a legitimate concern: our compressed image (~475MB) is much smaller than
+evilsocket/jayofelony images (1.1-2GB+), and our RL is a bandit, not evilsocket's A2C+LSTM. Before
+continuing, we audited six reference repos (evilsocket/pwnagotchi, jayofelony/pwnagotchi,
+CoderFX/oxigotchi, pineapple_pager_pagergotchi, Pwnagotchi-For-Banana-Orange-Pi,
+Fancygotchi-cyd-port) to check whether small size or a simpler RL model means we're missing
+functionality, or whether it's expected variance. Findings, so this isn't re-litigated later:
+
+**Image size is not a red flag.** evilsocket's original: ~1.9-2.05GB compressed. jayofelony's fork:
+~1.14-1.20GB for most of the last year, jumping to ~1.47-1.50GB only in the latest release (heavier
+Trixie base, unrelated to AI). oxigotchi (pure Rust, zero AI) is still ~1.72GB compressed. Every
+comparable project sits at 1.1GB+, and oxigotchi proves the size gap has nothing to do with missing
+AI — it has none and is still 1.72GB. The actual drivers of reference-image size: full Kali/Buster/
+Trixie base OS, broad multi-chipset firmware (`firmware-atheros`/`libertas`/`realtek` etc. for
+hardware this project will never run on), unstripped build toolchains left on the image
+(jayofelony's image ships both Rust and Go toolchains plus cloned bettercap/pwngrid source+vendor
+trees after `make install`), and (upstream only) a heavy TF1/OpenCV/SciPy/stable-baselines Python ML
+stack. None of that is present or needed in a single static Rust binary + a minimal bookworm base.
+
+**A2C/LSTM RL is not the baseline "real" implementation to match — it's already been dropped
+everywhere except one repo.** jayofelony's fork, which is what real users actually run today, has
+completely removed RL/AI: no TensorFlow, no model, `pyproject.toml` explicitly strips
+`numpy`/`gast`/`shimmy` with the comment "were AI training pipeline dependencies only", and
+`grid.py` hardcodes `'ai': "No AI!"` to the mesh network. Same pattern in oxigotchi (no AI), the
+Pineapple Pager port (AI "removed... just a simple reward calculation"), and the CYD ESP32 port
+(no AI, pure threshold-based mood). Only the Banana/Orange Pi port (a direct evilsocket fork on a
+full Linux SBC) keeps the original TF1/A2C training intact. Conclusion: RL/AI is the first thing
+dropped under any resource or scope pressure, and our `BanditPolicy` (genuine online epsilon-greedy
+learning, real Q-value updates from real reward signal) is more sophisticated than 4 of these 5
+non-upstream implementations. evilsocket's *original* RL (for the record, since it's the one
+credible baseline): A2C via `stable_baselines`(TF1) + `MlpLstmPolicy`, trained **online, on-device**
+(not offline, correcting an earlier assumption this session) — observation = AP/STA/peer channel
+histograms + 8 epoch-scalar ratios (a similar shape to our own 49-dim `Features` struct), actions =
+13 personality params + per-channel hop decision (broader than our current channel/attack-only
+action space), reward = a weighted sum: `+handshake_ratio (dominant) + 0.2*active_ratio +
+0.1*hop_ratio - 0.3*blind_ratio - 0.3*missed_interaction_ratio - 0.2*inactive_ratio - 0.2*sad_ratio
+- 0.1*bored_ratio`. Our current reward is a flat `+1.0`/`-0.2`. Enriching it with this weighted
+formula (we already track most of the needed `EpochState` fields — `aps_found`,
+`handshakes_this_epoch`, `blind_epochs`, `deauths_sent`, `assoc_attempts`) is a worthwhile future
+improvement, not yet implemented.
+
+**XP/leveling is a legitimate, precedented design choice, not an invention.** evilsocket's original
+has no XP/leveling at all — mood only (angry/sad/bored/excited/lonely/grateful), driven by
+consecutive active/inactive epoch counters, with a peer-bond override (a well-bonded unit gets
+"grateful" *instead of* whatever negative mood it would otherwise compute — a real mechanic we
+don't yet implement; our `compute_mood()` short-circuits to `Motivated` on non-empty peers before
+the negative-mood logic even runs, rather than overriding an already-computed negative mood; low
+priority since mesh peer *reception* has no real signal source yet either). oxigotchi, a sibling
+Rust reimplementation, *does* have XP/leveling (quadratic curve, level cap 999, atomic JSON
+persistence, +0.08 mood boost on level-up) — validating our own XP/level system as a reasonable
+design, even though it diverges from evilsocket's mood-only original. jayofelony's recovery file
+(`/root/.pwnagotchi-recovery`) is session-resume state (deleted after one load), not lifetime-
+accumulating XP like ours — a deliberate difference, justified by wanting a lifetime "progress"
+narrative rather than a per-session one.
+
+**Display investment was the right call.** Cross-hardware ports that skip a real display driver
+(the Banana/Orange Pi port disables the display by default rather than adapting drivers) are
+considered incomplete/"token" ports by comparison. Our real e-ink SPI/GPIO Rust driver
+(`ui/display`) is more complete than most of the ports surveyed, even before the current
+"does it actually render on real silicon" bug is resolved.
+
+**Bottom line**: nothing in this audit surfaced missing functionality relative to what real users
+actually run (jayofelony's fork). The open item is enriching the RL reward function per the
+weighted formula above — tracked, not urgent, not a fidelity gap serious enough to block release.
+
+---
+
 ## Tech Stack
 
 | Layer | Choice | Rationale |
