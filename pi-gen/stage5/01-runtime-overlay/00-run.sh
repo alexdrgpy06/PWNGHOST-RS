@@ -68,6 +68,24 @@ done
 systemctl enable NetworkManager.service 2>/dev/null || true
 systemctl enable ssh.service 2>/dev/null || systemctl enable sshd.service 2>/dev/null || true
 
+# --- USB gadget serial console (ttyGS0) -----------------------------------
+# The g_ether kernel module (modules-load=dwc2,g_ether, see
+# stage1/00-boot-files/files/cmdline.txt) composites a CDC ACM (serial)
+# function alongside the Ethernet one -- this is why the gadget shows up on
+# a host PC as BOTH a network adapter and a "USB Serial Device (COMn)".
+# Neither pwnghost-rs nor oxigotchi (confirmed via a fresh audit of their
+# repo, 2026-07-18: zero references to ttyGS0/serial-getty/g_serial
+# anywhere) ever wired a getty to that ACM function -- it's a harmless,
+# unintentional byproduct of g_ether, not a real, working console. That
+# made it a dead end during hardware testing: the port enumerates but
+# nothing is listening on it, no matter the cable/port used.
+#
+# Turn it into an actual, working fallback console -- useful specifically
+# when the primary usb0/NetworkManager network path (see usb0.nmconnection)
+# isn't up yet, or SSH access is broken for some other reason, without
+# requiring HDMI+keyboard.
+systemctl enable serial-getty@ttyGS0.service 2>/dev/null || true
+
 # bt-pan@.service is a template unit started per-device MAC at runtime
 # (systemctl start bt-pan@AA:BB:CC:DD:EE:FF.service), not enabled here.
 
