@@ -66,13 +66,30 @@ esac
 WORK_DIR="${WORK_DIR:-/work}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$WORK_DIR/artifacts}"
 OVERLAY_DIR="${OVERLAY_DIR:-$WORK_DIR/overlay}"
-IMG_XZ="$WORK_DIR/pwnagotchi-32bit-2.9.5.4.img.xz"
-IMG_URL="https://github.com/jayofelony/pwnagotchi/releases/download/v2.9.5.4/pwnagotchi-32bit-2.9.5.4.img.xz"
-# Pinned checksum -- confirmed against the release's published sha256
-# during the research/planning pass for this pipeline. If jayofelony
-# publishes a newer release, this must be updated deliberately, not
-# silently skipped.
-IMG_SHA256="1581bcb7ecd388d913b3d19856cb46435a125775905ad1b455a9be5b964f2da5"
+# v2.9.5.4 (the then-current release) was the original base for this
+# pipeline, but real hardware testing showed it doesn't boot at all on
+# either Pi Zero W or Pi Zero 2W -- confirmed with the correctly matched
+# image on each board, ruling out an architecture mismatch. v2.9.5.4 is
+# also the ONLY release built on Debian 13 "Trixie" (every earlier
+# release, including the one just below, is Bookworm) and the only one
+# with the new brcmfmac-nexmon-dkms/rpi-usb-gadget packaging -- both
+# changed together in that one release, so which one actually broke boot
+# on these boards isn't isolated, just correlated.
+#
+# Switched to v2.9.5.3 (Bookworm, one release earlier) after directly
+# confirming it still has real nexmon: the *active* brcmfmac.ko.xz
+# (decompressed and inspected, not inferred from a package name) contains
+# genuine nexmon symbols (nexmon_nl_ioctl_handler,
+# brcmf_cfg80211_nexmon_set_channel) and its own build path
+# (/usr/local/src/nexmon/patches/driver/brcmfmac_6.6.y-nexmon/) -- this
+# release just doesn't package it as brcmfmac-nexmon-dkms/firmware-nexmon
+# the way v2.9.5.4 does; the nexmon-patched .ko is baked in directly.
+# bettercap/pwngrid/pwnagotchi/toolchain paths are identical to v2.9.5.4
+# (confirmed directly, not assumed) so the strip step below needs no
+# changes for this base swap.
+IMG_XZ="$WORK_DIR/pwnagotchi-2.9.5.3-32bit.img.xz"
+IMG_URL="https://github.com/jayofelony/pwnagotchi/releases/download/v2.9.5.3/pwnagotchi-2.9.5.3-32bit.img.xz"
+IMG_SHA256="e2f691a4b974afeffe05071b42a0c14e54b127aa491a9d54de9820f6bd2df69b"
 
 RAW_IMG="$WORK_DIR/base.img"
 BOOT_MNT="$WORK_DIR/mnt-boot"
