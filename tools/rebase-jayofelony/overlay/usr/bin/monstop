@@ -1,0 +1,9 @@
+#!/bin/bash
+# Return the radio to managed mode (manual/admin use only).
+set -e
+IFACE="${1:-wlan0}"
+MON="${IFACE}mon"
+ip link set "$MON" down 2>/dev/null || true
+iw dev "$MON" set type managed 2>/dev/null || true
+ip link set "$MON" name "$IFACE" 2>/dev/null || true
+ip link set "$IFACE" up

@@ -1,0 +1,8 @@
+#!/bin/bash
+# Put the Wi-Fi radio into monitor mode as wlan0mon (manual/admin use only).
+set -e
+IFACE="${1:-wlan0}"
+ip link set "$IFACE" down
+iw dev "$IFACE" set type monitor
+ip link set "$IFACE" name "${IFACE}mon" 2>/dev/null || true
+ip link set "${IFACE}mon" up

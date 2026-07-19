@@ -1,0 +1,13 @@
+[Unit]
+Description=Boot diagnostics and SSH self-heal (writes /boot/firmware/bootlog.txt)
+After=local-fs.target boot-firmware.mount network.target
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/bootlog.sh
+RemainAfterExit=yes
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

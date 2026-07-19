@@ -1,0 +1,13 @@
+[Unit]
+Description=ZRAM data mount for pwnghost-rs
+Before=pwnghost-rs.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/zram-setup.sh data 10M /var/tmp/pwnghost
+ExecStop=/usr/local/bin/zram-teardown.sh data
+
+[Install]
+WantedBy=local-fs.target

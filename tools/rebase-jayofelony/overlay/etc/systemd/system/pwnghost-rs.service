@@ -1,0 +1,37 @@
+[Unit]
+Description=PWNGHOST-RS - Rust Pwnagotchi Implementation
+Documentation=https://github.com/pwnghost-rs/pwnghost-rs
+After=network.target
+Wants=network.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/local/bin/pwnghost-rs --config /etc/pwnghost/config.toml
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/etc/pwnghost /var/log/pwnghost /var/tmp/pwnghost /var/lib/pwnghost /run/pwnghost
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_SYS_RESOURCE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+MemoryMax=50M
+CPUQuota=80%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pwnghost-rs
+
+[Install]
+WantedBy=multi-user.target

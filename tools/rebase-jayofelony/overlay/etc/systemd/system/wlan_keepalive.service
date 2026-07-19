@@ -1,0 +1,23 @@
+[Unit]
+Description=WiFi monitor interface keepalive (BCM43436B0 SDIO bus)
+Documentation=https://github.com/pwnghost-rs/pwnghost-rs
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wlan_keepalive wlan0mon 100
+Restart=always
+RestartSec=3
+Nice=10
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

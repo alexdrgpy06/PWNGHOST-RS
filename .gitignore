@@ -6,3 +6,9 @@
 .DS_Store
 *.swp
 build-artifacts/
+
+# tools/rebase-jayofelony: downloaded base image, cross-compiled binaries,
+# and produced output images -- all generated/downloaded, not source.
+tools/rebase-jayofelony/artifacts/
+tools/rebase-jayofelony/*.img
+tools/rebase-jayofelony/*.img.xz

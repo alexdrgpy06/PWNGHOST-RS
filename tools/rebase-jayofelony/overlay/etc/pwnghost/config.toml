@@ -1,0 +1,115 @@
+# PWNGHOST-RS Configuration for Raspberry Pi Zero W / Zero 2W
+# Waveshare V4 e-ink display (2.13" / 2.7" / 2.9")
+#
+# Kept byte-for-byte identical to pi-gen/stage5/00-install-pwnghost's
+# shipped default (see that file for the from-scratch build's copy) so
+# the two pipelines' default behavior doesn't drift apart.
+
+[main]
+name = "pwnghost"
+lang = "en"
+iface = "wlan0"
+mon_start_cmd = "/usr/bin/monstart"
+mon_stop_cmd = "/usr/bin/monstop"
+mon_max_blind_epochs = 5
+no_restart = false
+whitelist = []
+confd = "/etc/pwnghost/conf.d/"
+custom_plugin_repos = []
+custom_plugins = "/usr/local/share/pwnghost/custom-plugins/"
+
+[main.log]
+path = "/var/log/pwnghost/pwnghost.log"
+path_debug = "/var/log/pwnghost/pwnghost-debug.log"
+
+[main.log.rotation]
+enabled = true
+size = "10M"
+
+[personality]
+bored_num_epochs = 50
+sad_num_epochs = 100
+angry_num_epochs = 200
+lonely_num_epochs = 150
+bond_encounters_factor = 1.0
+max_interactions = 10
+throttle = 30
+reward_handshake = 100
+reward_new_ap = 10
+reward_association = 5
+penalty_missed = -10
+penalty_reboot = -50
+min_recon_time = 5
+max_recon_time = 30
+hop_recon_time = 10
+deauth = false
+associate = false
+min_rssi = -80
+
+[ui.web]
+enabled = true
+address = "0.0.0.0"
+auth = false
+username = "changeme"
+password = "changeme"
+origin = ""
+port = 8080
+on_frame = ""
+
+[ui.web.theme]
+accent_r = 76
+accent_g = 175
+accent_b = 80
+
+[ui.display]
+enabled = true
+rotation = 180
+display_type = "waveshare_v4"
+
+[ui.faces]
+png = false
+position_x = 0
+position_y = 16
+
+[bettercap]
+handshakes = "/etc/pwnghost/handshakes"
+silence = [
+    "ble.device.new", "ble.device.lost",
+    "wifi.client.new", "wifi.client.lost",
+    "wifi.ap.new", "wifi.ap.lost",
+    "mod.started"
+]
+
+[fs]
+enabled = true
+
+[fs.mounts.log]
+enabled = true
+mount = "/var/log/pwnghost/"
+size = "50M"
+sync = 60
+zram = true
+rsync = true
+
+[fs.mounts.data]
+enabled = true
+mount = "/var/tmp/pwnghost"
+size = "10M"
+sync = 3600
+zram = true
+rsync = true
+
+[plugins.auto_tune]
+enabled = true
+
+[plugins.auto_backup]
+enabled = true
+
+[plugins.auto_update]
+enabled = true
+
+[plugins.grid]
+enabled = true
+
+[plugins.webcfg]
+enabled = true

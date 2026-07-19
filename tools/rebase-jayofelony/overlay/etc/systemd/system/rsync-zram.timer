@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic ZRAM to Disk Sync
+Requires=zram-log.service zram-data.service
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target
