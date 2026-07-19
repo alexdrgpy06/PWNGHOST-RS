@@ -46,10 +46,16 @@ picked as the safer middle ground: Bookworm (not the Trixie base that
 hung on real hardware), and directly confirmed to have real nexmon via
 the kernel-module check above (its `.info` manifest alone doesn't show
 `brcmfmac-nexmon-dkms` since this release predates that packaging, but the
-patched module is baked in directly). USB-gadget setup is **not**
-pre-configured in this release (no `dwc2`/`g_ether` in `cmdline.txt`,
-unlike our own from-scratch build) -- that's a real gap versus v2.9.5.4's
-`rpi-usb-gadget` package, not yet addressed here.
+patched module is baked in directly). USB-gadget/RNDIS *is* pre-configured
+here, the same way it has been since evilsocket's original pwnagotchi:
+`cmdline.txt` has `modules-load=dwc2,g_ether` and `config.txt` has
+`dtoverlay=dwc2` -- confirmed by mounting the actual boot partition
+directly (an earlier pass here wrongly checked `boot/cmdline.txt` inside
+the *root* partition's mount, which is just the empty mountpoint stub, not
+the real file, and concluded it was missing). This is plain `g_ether`,
+not our own from-scratch build's hand-built configfs RNDIS gadget --
+Windows still needs the manual driver install described in jayofelony's
+wiki (`rpi-usb-gadget-driver-setup.exe`), same as every release checked.
 
 v2.8.9 (bullseye) is also a viable candidate -- it has the user's own
 direct confirmation of booting on this exact hardware, and now-confirmed
@@ -91,14 +97,13 @@ binary/config/services present and enabled, bettercap/pwngrid/pwnagotchi
 fully gone.
 
 **Explicitly not touched**: the patched `brcmfmac.ko`, firmware blobs,
-NetworkManager, kernel/dtb files. The entire point of this pipeline is to
-keep that proven hardware-enablement layer exactly as shipped, not
-re-derive it. Note: unlike v2.9.5.4, this base (v2.9.5.3) does not
-pre-configure USB gadget networking at all (no `dwc2`/`g_ether` in
-`cmdline.txt`, no `rpi-usb-gadget` package) -- PWNGHOST-RS's own
+`cmdline.txt`/`config.txt` (which already carry the `dwc2`/`g_ether` USB
+gadget setup, confirmed above), NetworkManager, kernel/dtb files. The
+entire point of this pipeline is to keep that proven hardware-enablement
+layer exactly as shipped, not re-derive it -- none of PWNGHOST-RS's own
 `usb-gadget-setup.service`/`usb0.nmconnection`/`cmdline.txt` changes from
-the from-scratch build are also not applied here, so USB console/network
-access is currently unaddressed on this base. Worth revisiting.
+the from-scratch build are applied here; this base's own plain-`g_ether`
+setup is used as-is instead.
 
 ## Building
 
