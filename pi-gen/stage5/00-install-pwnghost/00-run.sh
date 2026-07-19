@@ -151,7 +151,23 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/etc/pwnghost /var/log/pwnghost /var/tmp/pwnghost /var/lib/pwnghost /run/pwnghost
+ReadWritePaths=/etc/pwnghost /var/log/pwnghost /var/tmp/pwnghost /var/lib/pwnghost
+# RuntimeDirectory (not a bare /run/pwnghost in ReadWritePaths=) is
+# required: /run is tmpfs, wiped fresh on every boot, so nothing at
+# build time can pre-create /run/pwnghost for it to persist. With
+# ProtectSystem=strict, listing a ReadWritePaths= entry that doesn't
+# exist makes systemd's mount-namespace setup fail outright before the
+# process even starts -- confirmed on real hardware (via the
+# tools/rebase-jayofelony pipeline, which uses this same unit content):
+# "Failed to set up mount namespacing: .../run/pwnghost: No such file or
+# directory", "Failed at step NAMESPACE", status=226/NAMESPACE, looping
+# through the restart limit and never actually starting. This unit is
+# the source of truth for pwnghost-rs.service copied into that pipeline
+# too, so the bug was universal to every image built this session, not
+# specific to the rebase. RuntimeDirectory= is systemd's own mechanism
+# for exactly this: it creates (and removes) /run/pwnghost around each
+# start/stop of this unit.
+RuntimeDirectory=pwnghost
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_SYS_RESOURCE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
