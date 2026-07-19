@@ -1,25 +1,29 @@
 #!/bin/bash -e
-# build.sh - Rebase PWNGHOST-RS onto jayofelony/pwnagotchi's current
-# release image (v2.9.5.4, 32-bit, "noai" branch), instead of building
-# the OS from scratch via pi-gen.
+# build.sh - Rebase PWNGHOST-RS onto a jayofelony/pwnagotchi release image
+# (see the BASE_VERSION case statement below for supported versions and
+# why each is a candidate), instead of building the OS from scratch via
+# pi-gen.
 #
 # Why: this project's own from-scratch pi-gen build has spent real
 # engineering effort this session getting USB gadget networking right; a
 # real, actively-maintained pwnagotchi image already has that solved
-# (rpi-usb-gadget package) along with real nexmon monitor-mode/injection
-# support for both BCM43430 (Pi Zero W) and BCM43436B0 (Pi Zero 2W) --
-# confirmed directly from the image's own build manifest and a full
-# rootfs inspection before writing this script (see
-# tools/rebase-jayofelony/README.md for the exact findings). Rather than
-# re-deriving that hardware-enablement layer, this script keeps it
-# untouched and strips out everything specific to the Python
+# along with real nexmon monitor-mode/injection support for both
+# BCM43430 (Pi Zero W) and BCM43436B0 (Pi Zero 2W) -- confirmed directly
+# by decompressing and inspecting the actual kernel module, not inferred
+# from a package name (see tools/rebase-jayofelony/README.md for the
+# full findings, including which base versions actually boot on real
+# hardware -- that's still being narrowed down as of this revision).
+# Rather than re-deriving that hardware-enablement layer, this script
+# keeps it untouched and strips out everything specific to the Python
 # pwnagotchi/bettercap/pwngrid stack, replacing it with our own compiled
 # pwnghost-rs binary and systemd units.
 #
 # This does NOT replace or modify the existing pi-gen build in any way --
 # it produces a separate, alternate image so both can be compared.
 #
-# Usage: BOARD=pi-zero-w ./build.sh   (or BOARD=pi-zero-2w)
+# Usage: BOARD=pi-zero-w BASE_VERSION=2.8.9 ./build.sh
+#   BOARD: pi-zero-w or pi-zero-2w
+#   BASE_VERSION: 2.9.5.3 (default) or 2.8.9
 # Requires: an already cross-compiled artifacts/ dir from Dockerfile.builder
 #   (artifacts/arm-unknown-linux-gnueabihf/{pwnghost-rs,wlan_keepalive} and
 #   artifacts/armv7-unknown-linux-gnueabihf/{pwnghost-rs,wlan_keepalive}).
@@ -27,6 +31,8 @@
 # (privileged, for loop-mount + chroot).
 
 set -euo pipefail
+
+BASE_VERSION="${BASE_VERSION:-2.9.5.3}"
 
 # Docker containers typically only pre-populate a handful of /dev/loopN
 # device nodes -- `losetup -f` happily reports the next free NAME (e.g.
@@ -66,36 +72,54 @@ esac
 WORK_DIR="${WORK_DIR:-/work}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$WORK_DIR/artifacts}"
 OVERLAY_DIR="${OVERLAY_DIR:-$WORK_DIR/overlay}"
-# v2.9.5.4 (the then-current release) was the original base for this
-# pipeline, but real hardware testing showed it doesn't boot at all on
-# either Pi Zero W or Pi Zero 2W -- confirmed with the correctly matched
-# image on each board, ruling out an architecture mismatch. v2.9.5.4 is
-# also the ONLY release built on Debian 13 "Trixie" (every earlier
-# release, including the one just below, is Bookworm) and the only one
-# with the new brcmfmac-nexmon-dkms/rpi-usb-gadget packaging -- both
-# changed together in that one release, so which one actually broke boot
-# on these boards isn't isolated, just correlated.
-#
-# Switched to v2.9.5.3 (Bookworm, one release earlier) after directly
-# confirming it still has real nexmon: the *active* brcmfmac.ko.xz
-# (decompressed and inspected, not inferred from a package name) contains
-# genuine nexmon symbols (nexmon_nl_ioctl_handler,
-# brcmf_cfg80211_nexmon_set_channel) and its own build path
-# (/usr/local/src/nexmon/patches/driver/brcmfmac_6.6.y-nexmon/) -- this
-# release just doesn't package it as brcmfmac-nexmon-dkms/firmware-nexmon
-# the way v2.9.5.4 does; the nexmon-patched .ko is baked in directly.
-# bettercap/pwngrid/pwnagotchi/toolchain paths are identical to v2.9.5.4
-# (confirmed directly, not assumed) so the strip step below needs no
-# changes for this base swap.
-IMG_XZ="$WORK_DIR/pwnagotchi-2.9.5.3-32bit.img.xz"
-IMG_URL="https://github.com/jayofelony/pwnagotchi/releases/download/v2.9.5.3/pwnagotchi-2.9.5.3-32bit.img.xz"
-IMG_SHA256="e2f691a4b974afeffe05071b42a0c14e54b127aa491a9d54de9820f6bd2df69b"
+
+# Which jayofelony release to rebase onto. Real hardware testing across
+# several candidates so far (all confirmed to have genuine nexmon --
+# decompressed and grepped the *active* brcmfmac.ko directly, not
+# inferred from a package name, since that's the one check that's
+# actually proven reliable across versions):
+#   - v2.9.5.4 (Trixie, the original base): hangs black-screen/no-LED on
+#     Pi Zero W, and kernel panics on Pi Zero 2W were also seen on the
+#     v2.9.5.3-rebased image, so this whole 2.9.x lineage's real-hardware
+#     compatibility on these two boards is still unresolved, not just a
+#     v2.9.5.4-vs-Trixie problem as first assumed.
+#   - v2.9.5.3 (Bookworm): built and shipped as rebased-v2, but the user
+#     saw a kernel panic on Pi Zero 2W and a stuck/blank-HDMI hang after
+#     the first-boot user/pass prompt on Pi Zero W -- not yet confirmed
+#     whether that's this base image itself or something in this script's
+#     modifications; still an open question.
+#   - v2.8.9 (bullseye): the user's own direct prior experience is that
+#     this one actually boots and runs on this exact hardware. Different
+#     install layout from the two above -- pwnagotchi is a system-wide
+#     pip install (/usr/local/lib/python3.9/dist-packages/pwnagotchi),
+#     not an isolated venv, and there's no Go/Rust toolchain to strip at
+#     all (confirmed absent, not just untested).
+case "$BASE_VERSION" in
+    2.9.5.3)
+        IMG_XZ="$WORK_DIR/pwnagotchi-2.9.5.3-32bit.img.xz"
+        IMG_URL="https://github.com/jayofelony/pwnagotchi/releases/download/v2.9.5.3/pwnagotchi-2.9.5.3-32bit.img.xz"
+        IMG_SHA256="e2f691a4b974afeffe05071b42a0c14e54b127aa491a9d54de9820f6bd2df69b"
+        ;;
+    2.8.9)
+        IMG_XZ="$WORK_DIR/pwnagotchi-2.8.9-32bit.img.xz"
+        IMG_URL="https://github.com/jayofelony/pwnagotchi/releases/download/v2.8.9/pwnagotchi-2.8.9-32bit.img.xz"
+        IMG_SHA256="030c7d759cd130ef00bd6e8e741461b9aaea1f013c1a6be9eb2e87062066aa0f"
+        ;;
+    *)
+        echo "build.sh: unknown BASE_VERSION='$BASE_VERSION' (expected 2.9.5.3 or 2.8.9)" >&2
+        exit 1
+        ;;
+esac
 
 RAW_IMG="$WORK_DIR/base.img"
 BOOT_MNT="$WORK_DIR/mnt-boot"
 ROOT_MNT="$WORK_DIR/mnt-root"
-OUT_IMG="$WORK_DIR/pwnghost-rs-rebased-${BOARD}.img"
-OUT_XZ="$WORK_DIR/pwnghost-rs-rebased-${BOARD}.img.xz"
+# BASE_VERSION is part of the output name -- without it, building
+# BASE_VERSION=2.8.9 for a board silently overwrote a previous
+# BASE_VERSION=2.9.5.3 build for the same board (confirmed the hard way:
+# lost track of which build was actually being tested on real hardware).
+OUT_IMG="$WORK_DIR/pwnghost-rs-rebased-${BOARD}-${BASE_VERSION}.img"
+OUT_XZ="$WORK_DIR/pwnghost-rs-rebased-${BOARD}-${BASE_VERSION}.img.xz"
 
 log() { echo -e "\e[32m=== $* ===\e[0m"; }
 
@@ -173,23 +197,30 @@ mount --bind /dev "$ROOT_MNT/dev"
 
 # --- 5. Strip Python pwnagotchi/bettercap/pwngrid stack + toolchains ------
 # Every path here was confirmed by directly inspecting a mounted copy of
-# this exact release before writing this script (see README.md) --
-# nothing here is guessed from the install scripts alone, since at least
-# one path (the pwnagotchi venv) turned out to differ from what the
-# install script's own source suggested (/opt/.pwn at build time vs the
-# actual shipped /home/pi/.pwn).
+# the specific release(s) targeted (see README.md) -- nothing here is
+# guessed from install scripts alone, since paths have genuinely differed
+# between releases (the pwnagotchi venv location differs from what
+# v2.9.5.x's own install script source suggests; v2.8.9 doesn't use a
+# venv at all -- see BASE_VERSION comment above). `rm -rf` on a path that
+# doesn't exist on a given base version is a silent no-op, so this list
+# is deliberately a superset covering every version this script supports
+# rather than branching per-version.
 log "Stripping Python pwnagotchi/bettercap/pwngrid stack"
 chroot "$ROOT_MNT" /bin/bash -euo pipefail -c '
 systemctl disable pwnagotchi.service bettercap.service pwngrid-peer.service 2>/dev/null || true
 rm -f /etc/systemd/system/pwnagotchi.service \
       /etc/systemd/system/bettercap.service \
       /etc/systemd/system/pwngrid-peer.service
-rm -f /usr/bin/pwnagotchi
+rm -f /usr/bin/pwnagotchi /usr/bin/pwnagotchi-launcher /usr/local/bin/pwnagotchi
 rm -rf /home/pi/.pwn /home/pi/bettercap /home/pi/pwngrid
 rm -f /home/pi/firmware-nexmon_0.2_all.deb.1 /home/pi/firmware-nexmon_0.2_all.deb.2
 rm -f /usr/local/bin/bettercap /usr/local/bin/pwngrid
 rm -rf /usr/local/go
 rm -rf /root/.cargo /root/.rustup
+# v2.8.9-style system-wide pip install (no isolated venv) -- remove the
+# package and its metadata directly rather than a venv rm -rf.
+rm -rf /usr/local/lib/python3.9/dist-packages/pwnagotchi \
+       /usr/local/lib/python3.9/dist-packages/pwnagotchi-*.dist-info
 apt-get purge -y golang-go golang-1.2* build-essential 2>/dev/null || true
 apt-get autoremove -y --purge 2>/dev/null || true
 apt-get clean
@@ -234,7 +265,23 @@ chmod +x /lib/systemd/system-shutdown/safe-shutdown.sh 2>/dev/null || true
 # "marked executable"/"marked world-writable" on a real run despite the
 # source files being 644 on disk. Set the correct mode explicitly here
 # instead of trusting whatever rsync copied.
-chmod 644 /etc/systemd/system/*.service /etc/systemd/system/*.timer
+#
+# Named explicitly (not a *.service/*.timer glob over the whole
+# directory) -- a glob also matches every pre-existing unit this base
+# image already ships, including at least one dangling symlink on
+# v2.8.9 (dbus-org.freedesktop.ModemManager1.service), on which chmod
+# fails outright and, under set -e, aborted the entire strip+install
+# step on a real run.
+chmod 644 /etc/systemd/system/pwnghost-rs.service \
+          /etc/systemd/system/wlan_keepalive.service \
+          /etc/systemd/system/zram-log.service \
+          /etc/systemd/system/zram-data.service \
+          /etc/systemd/system/rsync-zram.service \
+          /etc/systemd/system/rsync-zram.timer \
+          /etc/systemd/system/buffer-cleaner.service \
+          /etc/systemd/system/buffer-cleaner.timer \
+          /etc/systemd/system/bootlog.service \
+          /etc/systemd/system/safe-shutdown.service
 systemctl enable pwnghost-rs.service wlan_keepalive.service
 systemctl enable zram-log.service zram-data.service rsync-zram.timer buffer-cleaner.timer bootlog.service safe-shutdown.service 2>/dev/null || true
 '
