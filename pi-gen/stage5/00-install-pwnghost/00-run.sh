@@ -148,7 +148,19 @@ StartLimitBurst=3
 
 # Security hardening
 NoNewPrivileges=yes
-PrivateTmp=yes
+# PrivateTmp=yes is deliberately NOT set here: it gives the unit a fresh,
+# empty, PRIVATE /tmp *and* /var/tmp on every single start (systemd
+# mounts a new tmpfs over both), which is incompatible with
+# ReadWritePaths=/var/tmp/pwnghost below -- that path is meant to be the
+# real, shared /var/tmp/pwnghost (our own tmpfs capture-staging mount
+# from pi-gen/stage5's zram/tmpfs setup, expected to persist across
+# service restarts within a boot), not a throwaway per-restart sandbox.
+# Confirmed on real hardware: with PrivateTmp=yes, RuntimeDirectory=
+# fixed /run/pwnghost, but the exact same failure then moved to
+# /var/tmp/pwnghost ("Failed to set up mount namespacing:
+# .../var/tmp/pwnghost: No such file or directory", status=226/NAMESPACE)
+# -- because PrivateTmp's fresh private /var/tmp never has that
+# subdirectory, no matter what build time or ReadWritePaths says.
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/etc/pwnghost /var/log/pwnghost /var/tmp/pwnghost /var/lib/pwnghost

@@ -15,7 +15,13 @@ StartLimitBurst=3
 
 # Security hardening
 NoNewPrivileges=yes
-PrivateTmp=yes
+# PrivateTmp=yes is deliberately NOT set here: it gives the unit a fresh,
+# empty, PRIVATE /tmp *and* /var/tmp on every single start, which
+# conflicts with ReadWritePaths=/var/tmp/pwnghost below -- confirmed on
+# real hardware: with PrivateTmp=yes, RuntimeDirectory= fixed
+# /run/pwnghost, but the exact same 226/NAMESPACE failure then moved to
+# /var/tmp/pwnghost, since PrivateTmp's fresh private /var/tmp never has
+# that subdirectory no matter what build time or ReadWritePaths says.
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/etc/pwnghost /var/log/pwnghost /var/tmp/pwnghost /var/lib/pwnghost
