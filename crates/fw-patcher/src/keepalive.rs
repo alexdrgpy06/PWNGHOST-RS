@@ -71,16 +71,17 @@ use tracing::{info, warn};
 pub const KEEPALIVE_BINARY_PATH: &str = "/usr/local/bin/wlan_keepalive";
 /// Path to systemd service file.
 pub const KEEPALIVE_SERVICE_PATH: &str = "/etc/systemd/system/wlan_keepalive.service";
-/// Default monitor interface the daemon listens/injects on. "wlan0", not
-/// "wlan0mon": AngryOxide manages monitor mode itself via netlink and
-/// never renames the interface (see `pwnghost-rs::main`'s AngryOxide
-/// init), so the interface this daemon needs to watch is whatever
-/// `config.main.iface` already is -- confirmed on real hardware that a
-/// stale "wlan0mon" default here (inherited from the old aircrack-ng-style
-/// rename convention this project no longer uses) left the daemon
-/// watching an interface that never existed, silently idle for its whole
-/// run.
-pub const DEFAULT_INTERFACE: &str = "wlan0";
+/// Default monitor interface the daemon listens/injects on. "wlan0mon":
+/// Phase 1 replaced AngryOxide (which managed monitor mode itself via
+/// netlink on plain "wlan0" and never renamed the interface) with
+/// bettercap, which -- like real pwnagotchi -- consumes an
+/// already-monitor-mode interface brought up by `monstart`
+/// (`config.main.mon_start_cmd`) under the name "wlan0mon"
+/// (`config.main.iface`'s new default). This was briefly "wlan0" during
+/// the AngryOxide era; confirmed on real hardware that "wlan0mon" is
+/// correct again now that `monstart` genuinely creates that interface for
+/// bettercap to use.
+pub const DEFAULT_INTERFACE: &str = "wlan0mon";
 /// Default poll interval (ms) for draining RX frames (first CLI arg is the
 /// interface, second is this value -- both positional, not env vars).
 pub const DEFAULT_POLL_MS: u32 = 100;
@@ -263,7 +264,7 @@ mod tests {
             "/etc/systemd/system/wlan_keepalive.service"
         );
         assert_eq!(KEEPALIVE_BINARY_PATH, "/usr/local/bin/wlan_keepalive");
-        assert_eq!(DEFAULT_INTERFACE, "wlan0");
+        assert_eq!(DEFAULT_INTERFACE, "wlan0mon");
         assert_eq!(DEFAULT_POLL_MS, 100);
     }
 }

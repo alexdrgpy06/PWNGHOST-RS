@@ -414,6 +414,8 @@ impl DisplayDriver {
             }
             #[cfg(feature = "hardware")]
             Backend::Hardware(mut panel) => {
+                let width = self.config.width;
+                let height = self.config.height;
                 let buffer = buffer.to_vec();
                 let join_result = tokio::task::spawn_blocking(move || {
                     let result = panel.push_frame(&buffer, width, height, effective_partial);

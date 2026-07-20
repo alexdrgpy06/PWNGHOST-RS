@@ -1,17 +1,20 @@
 [Unit]
 Description=WiFi monitor interface keepalive (BCM43436B0 SDIO bus)
 Documentation=https://github.com/pwnghost-rs/pwnghost-rs
-After=network.target
+After=network.target bettercap.service
 Wants=network.target
+# wlan0mon only exists once bettercap.service's ExecStartPre (monstart) has
+# brought it up -- start after that, not just after network.target.
+Requisite=bettercap.service
 
 [Service]
 Type=simple
-# "wlan0", not "wlan0mon": AngryOxide manages monitor mode itself via
-# netlink and never renames the interface (see pwnghost-rs's main.rs) --
-# confirmed on real hardware that the old "wlan0mon" arg meant this daemon
-# was watching an interface that never existed, and it sat idle for its
-# entire run ("wlan_keepalive: stopped (0 total frames)" in its own log).
-ExecStart=/usr/local/bin/wlan_keepalive wlan0 100
+# "wlan0mon": Phase 1 replaced AngryOxide (which built monitor mode itself
+# on plain "wlan0" via netlink) with bettercap, which -- like real
+# pwnagotchi -- consumes an already-monitor-mode interface brought up by
+# `monstart`, named "wlan0mon". Confirmed on real hardware this is correct
+# again now that `monstart` genuinely creates that interface.
+ExecStart=/usr/local/bin/wlan_keepalive wlan0mon 100
 Restart=always
 RestartSec=3
 Nice=10

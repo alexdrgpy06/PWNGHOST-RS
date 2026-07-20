@@ -115,7 +115,7 @@ mod tests {
     async fn test_default_config() {
         let config = PwnConfig::default();
         assert_eq!(config.main.name, "pwnghost");
-        assert_eq!(config.main.iface, "wlan0");
+        assert_eq!(config.main.iface, "wlan0mon");
         assert!(config.ui.web.enabled);
     }
 

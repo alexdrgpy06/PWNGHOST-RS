@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "crates/pwncore",
     "crates/fw-patcher",
-    "crates/angryoxide",
+    "crates/bettercap",
     "crates/config",
     "crates/agent",
     "crates/rl-agent",
@@ -57,6 +57,11 @@ hex = "0.4"
 base64 = "0.21"
 sha2 = "0.10"
 async-trait = "0.1"
+# Blocking HTTP client for the bettercap REST client (crates/bettercap).
+# bettercap's API is loopback-only plain HTTP (never TLS), so a minimal
+# blocking client wrapped in spawn_blocking is simpler and much lighter to
+# cross-compile than reqwest's async+TLS stack for this one use.
+ureq = { version = "2", default-features = false }
 
 [profile.release]
 opt-level = "z"
