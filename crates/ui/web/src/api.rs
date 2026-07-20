@@ -333,7 +333,11 @@ mod tests {
             .get("wpa_sec")
             .and_then(|p| p.options.get("api_key"))
             .and_then(|v| v.as_str());
-        assert_eq!(key, Some("SECRET-KEY-123"), "patch wiped the plugin api_key");
+        assert_eq!(
+            key,
+            Some("SECRET-KEY-123"),
+            "patch wiped the plugin api_key"
+        );
         assert_eq!(guard.config.main.name, "new-name");
         drop(guard);
 

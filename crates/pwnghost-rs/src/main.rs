@@ -112,7 +112,10 @@ fn read_cpu_temp() -> Option<f32> {
 }
 
 fn parse_cpu_temp_millidegrees(raw: &str) -> Option<f32> {
-    raw.trim().parse::<f32>().ok().map(|milli_c| milli_c / 1000.0)
+    raw.trim()
+        .parse::<f32>()
+        .ok()
+        .map(|milli_c| milli_c / 1000.0)
 }
 
 /// (used_mb, total_mb) RAM, for the display's resource footer. `(0, 0)` if
@@ -237,8 +240,10 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("warning: could not create log directory {dir:?}: {e}");
         }
     }
-    let file_appender =
-        tracing_appender::rolling::never(log_dir.unwrap_or_else(|| std::path::Path::new(".")), log_file_name);
+    let file_appender = tracing_appender::rolling::never(
+        log_dir.unwrap_or_else(|| std::path::Path::new(".")),
+        log_file_name,
+    );
     let (non_blocking_file, _log_guard) = tracing_appender::non_blocking(file_appender);
 
     // Initialize logging: journal (stdout, systemd captures this via
@@ -882,14 +887,20 @@ mod tests {
         let (_face, line) = closest_peer_face_and_line(&[weak, strong]).unwrap();
         assert!(line.contains("close"));
         assert!(line.contains('5'));
-        assert!(line.starts_with("||||"), "strong signal should show 4 bars: {line}");
+        assert!(
+            line.starts_with("||||"),
+            "strong signal should show 4 bars: {line}"
+        );
     }
 
     #[test]
     fn test_closest_peer_face_and_line_weak_signal_shows_one_bar() {
         let peer = pwncore::Peer::new(pwncore::MacAddr::default(), "far".to_string(), 1, -90);
         let (_face, line) = closest_peer_face_and_line(&[peer]).unwrap();
-        assert!(line.starts_with("|..."), "weak signal should show 1 bar: {line}");
+        assert!(
+            line.starts_with("|..."),
+            "weak signal should show 1 bar: {line}"
+        );
     }
 
     #[test]
@@ -902,7 +913,10 @@ mod tests {
             parse_meminfo_field_kb("MemAvailable:     356792 kB", "MemAvailable:"),
             Some(356792)
         );
-        assert_eq!(parse_meminfo_field_kb("MemTotal:         474088 kB", "Cached:"), None);
+        assert_eq!(
+            parse_meminfo_field_kb("MemTotal:         474088 kB", "Cached:"),
+            None
+        );
     }
 
     #[test]

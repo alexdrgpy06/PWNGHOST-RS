@@ -82,7 +82,10 @@ pub fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
     match (base, patch) {
         (serde_json::Value::Object(base_map), serde_json::Value::Object(patch_map)) => {
             for (k, v) in patch_map {
-                merge_json(base_map.entry(k.clone()).or_insert(serde_json::Value::Null), v);
+                merge_json(
+                    base_map.entry(k.clone()).or_insert(serde_json::Value::Null),
+                    v,
+                );
             }
         }
         (base_slot, patch_val) => {
@@ -95,12 +98,9 @@ pub fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
 /// deep-merging, returning the merged config. Unspecified sections are
 /// preserved. Fails if the merged result no longer deserializes into a
 /// valid `PwnConfig` (e.g. the patch set a field to the wrong type).
-pub fn apply_config_patch(
-    current: &PwnConfig,
-    patch: &serde_json::Value,
-) -> Result<PwnConfig> {
-    let mut merged = serde_json::to_value(current)
-        .context("serializing current config for merge")?;
+pub fn apply_config_patch(current: &PwnConfig, patch: &serde_json::Value) -> Result<PwnConfig> {
+    let mut merged =
+        serde_json::to_value(current).context("serializing current config for merge")?;
     merge_json(&mut merged, patch);
     let cfg: PwnConfig =
         serde_json::from_value(merged).context("merged config is not a valid PwnConfig")?;

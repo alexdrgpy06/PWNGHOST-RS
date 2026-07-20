@@ -346,7 +346,13 @@ impl LayoutEngine {
         // manual/AI toggle exists), so `mode` is a constant "AUTO" -- a
         // real, honest value, not a placeholder standing in for an
         // unimplemented feature.
-        draw_line(&mut fb, mode, &small, self.config.mode_x, self.config.mode_y)?;
+        draw_line(
+            &mut fb,
+            mode,
+            &small,
+            self.config.mode_x,
+            self.config.mode_y,
+        )?;
 
         Ok(())
     }
@@ -462,7 +468,12 @@ fn draw_labeled_value(
 /// Draw a full-width horizontal divider line at `y` -- the section
 /// borders that make this read as an actual pwnagotchi screen instead of
 /// unbordered stacked text.
-fn draw_horizontal_divider(fb: &mut FrameBuffer<'_>, width: u32, y: i32, style: PrimitiveStyle<BinaryColor>) {
+fn draw_horizontal_divider(
+    fb: &mut FrameBuffer<'_>,
+    width: u32,
+    y: i32,
+    style: PrimitiveStyle<BinaryColor>,
+) {
     Line::new(Point::new(0, y), Point::new(width as i32 - 1, y))
         .into_styled(style)
         .draw(fb)
@@ -577,7 +588,13 @@ fn blit_coverage(
 /// block. Bits are packed MSB-first, padded to a byte boundary per row;
 /// bit == 1 means "ink". Retained only as the missing-glyph fallback path
 /// inside [`draw_ttf_line`].
-fn blit_glyph(fb: &mut FrameBuffer<'_>, bits: &[u8; fonts::GLYPH_BYTES], x: i32, y: i32, scale: i32) {
+fn blit_glyph(
+    fb: &mut FrameBuffer<'_>,
+    bits: &[u8; fonts::GLYPH_BYTES],
+    x: i32,
+    y: i32,
+    scale: i32,
+) {
     let row_bytes = (fonts::GLYPH_CELL_W as usize).div_ceil(8);
     for gy in 0..fonts::GLYPH_CELL_H as i32 {
         for gx in 0..fonts::GLYPH_CELL_W as i32 {
@@ -674,8 +691,21 @@ mod tests {
         let engine = LayoutEngine::new(config);
         engine
             .draw_pwnagotchi_frame(
-                &mut buffer, width, height, 6, 3, "01:02:03", "pwn", "hello", "(◕‿‿◕)", 1, 5, 2,
-                150, "AUTO", None,
+                &mut buffer,
+                width,
+                height,
+                6,
+                3,
+                "01:02:03",
+                "pwn",
+                "hello",
+                "(◕‿‿◕)",
+                1,
+                5,
+                2,
+                150,
+                "AUTO",
+                None,
             )
             .unwrap();
 
@@ -705,12 +735,29 @@ mod tests {
         let engine = LayoutEngine::new(config);
         engine
             .draw_pwnagotchi_frame(
-                &mut buffer, width, height, 1, 0, "0s", "pwn", "", "", 0, 0, 0, 0, "AUTO", None,
+                &mut buffer,
+                width,
+                height,
+                1,
+                0,
+                "0s",
+                "pwn",
+                "",
+                "",
+                0,
+                0,
+                0,
+                0,
+                "AUTO",
+                None,
             )
             .unwrap();
 
-        let row_coverage =
-            |y: u32| (0..width).filter(|&x| pixel_on(&buffer, width, x, y)).count();
+        let row_coverage = |y: u32| {
+            (0..width)
+                .filter(|&x| pixel_on(&buffer, width, x, y))
+                .count()
+        };
 
         assert!(
             row_coverage(line1_y) > (width as usize) / 2,
@@ -749,7 +796,12 @@ mod tests {
             .unwrap();
 
         assert!(
-            region_has_pixels(&buffer, width, friend_x..friend_x + 60, friend_y..friend_y + 10),
+            region_has_pixels(
+                &buffer,
+                width,
+                friend_x..friend_x + 60,
+                friend_y..friend_y + 10
+            ),
             "expected a friend line near (friend_x={friend_x}, friend_y={friend_y})"
         );
     }
@@ -762,7 +814,20 @@ mod tests {
         let engine = LayoutEngine::new(config);
         engine
             .draw_pwnagotchi_frame(
-                &mut buffer, width, height, 1, 0, "0s", "pwn", "", "", 0, 0, 0, 0, "AUTO",
+                &mut buffer,
+                width,
+                height,
+                1,
+                0,
+                "0s",
+                "pwn",
+                "",
+                "",
+                0,
+                0,
+                0,
+                0,
+                "AUTO",
                 Some(("(♥‿‿♥)", "|||| buddy 2 (5)")),
             )
             .unwrap();
@@ -781,12 +846,28 @@ mod tests {
         // cell -- so there must be face ink well below `face_y + 16`.
         let (width, height, mut buffer) = new_test_buffer();
         let config = LayoutConfig::default();
-        assert_eq!(config.face_size, 35, "face should render at real pwnagotchi's 35px");
+        assert_eq!(
+            config.face_size, 35,
+            "face should render at real pwnagotchi's 35px"
+        );
         let (face_x, face_y, px) = (config.face_x as u32, config.face_y as u32, config.face_size);
         let engine = LayoutEngine::new(config);
         engine
             .draw_pwnagotchi_frame(
-                &mut buffer, width, height, 1, 0, "0s", "pwn", "", "(◕‿‿◕)", 0, 0, 0, 0, "AUTO",
+                &mut buffer,
+                width,
+                height,
+                1,
+                0,
+                "0s",
+                "pwn",
+                "",
+                "(◕‿‿◕)",
+                0,
+                0,
+                0,
+                0,
+                "AUTO",
                 None,
             )
             .unwrap();
@@ -797,7 +878,12 @@ mod tests {
         let old_cell_bottom = face_y + 16;
         let ttf_bottom = (face_y + px).min(height);
         assert!(
-            region_has_pixels(&buffer, width, face_x..face_x + 30, old_cell_bottom..ttf_bottom),
+            region_has_pixels(
+                &buffer,
+                width,
+                face_x..face_x + 30,
+                old_cell_bottom..ttf_bottom
+            ),
             "expected face ink below the old 16px cell (in the 35px TTF region), \
              found none -- face may still be rendering small"
         );
@@ -844,7 +930,13 @@ mod tests {
         assert_eq!(advanced, expected);
         // The 5-glyph face at ~21px advance should span well under half the
         // 250px panel, i.e. it's compact, not spread across the screen.
-        assert!(advanced < 130, "face should be compact, spanned {advanced}px");
-        assert!(advanced > 40, "face should have real width, spanned {advanced}px");
+        assert!(
+            advanced < 130,
+            "face should be compact, spanned {advanced}px"
+        );
+        assert!(
+            advanced > 40,
+            "face should have real width, spanned {advanced}px"
+        );
     }
 }

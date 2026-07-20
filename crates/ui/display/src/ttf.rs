@@ -175,7 +175,11 @@ mod tests {
         assert_eq!(g.coverage.len(), g.width * g.height);
         assert!(g.advance > 0);
         // At 35px the 'A' should be a substantial glyph, not a 16px cell.
-        assert!(g.height > 20, "expected a ~35px-tall glyph, got {}", g.height);
+        assert!(
+            g.height > 20,
+            "expected a ~35px-tall glyph, got {}",
+            g.height
+        );
     }
 
     #[test]

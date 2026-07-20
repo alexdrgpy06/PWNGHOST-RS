@@ -86,8 +86,11 @@ pub fn glyph_advance_width(bits: &[u8; GLYPH_BYTES]) -> u32 {
     if row_bytes < 2 {
         return GLYPH_CELL_W;
     }
-    let is_wide = (0..GLYPH_CELL_H as usize)
-        .any(|row| bits[row * row_bytes + 1..(row + 1) * row_bytes].iter().any(|&b| b != 0));
+    let is_wide = (0..GLYPH_CELL_H as usize).any(|row| {
+        bits[row * row_bytes + 1..(row + 1) * row_bytes]
+            .iter()
+            .any(|&b| b != 0)
+    });
     if is_wide {
         GLYPH_CELL_W
     } else {

@@ -375,7 +375,8 @@ impl DisplayDriver {
         // confirmed the hard way) and every `FULL_REFRESH_EVERY` partial
         // refreshes thereafter, to bound ghosting. An explicit
         // `partial=false` from the caller always wins/resets the streak.
-        let force_full = !partial || !self.has_refreshed_once || self.partials_since_full >= FULL_REFRESH_EVERY;
+        let force_full =
+            !partial || !self.has_refreshed_once || self.partials_since_full >= FULL_REFRESH_EVERY;
         let effective_partial = partial && !force_full;
         self.has_refreshed_once = true;
         if effective_partial {
