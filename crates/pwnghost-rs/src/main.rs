@@ -142,7 +142,6 @@ fn parse_ram_usage_mb(meminfo: &str) -> (u64, u64) {
 
 fn parse_meminfo_field_kb(line: &str, prefix: &str) -> Option<u64> {
     line.strip_prefix(prefix)?
-        .trim()
         .split_whitespace()
         .next()?
         .parse()
@@ -194,7 +193,7 @@ fn animated_face(
     match mood {
         // Neutral recon/awake states: sweep the gaze left/right each tick.
         Mood::LookR | Mood::LookL | Mood::Awake => {
-            let look = match (tick % 2 == 0, good_mood) {
+            let look = match (tick.is_multiple_of(2), good_mood) {
                 (true, false) => Mood::LookR,
                 (false, false) => Mood::LookL,
                 (true, true) => Mood::LookRHappy,
@@ -777,8 +776,8 @@ async fn main() -> anyhow::Result<()> {
                     // `_refresh_handler` trailing block that toggles at fps
                     // -- a small always-moving element so the screen never
                     // looks hung even when nothing else changed this second.
-                    let name = if display_tick % 2 == 0 {
-                        format!("{}", config.main.name)
+                    let name = if display_tick.is_multiple_of(2) {
+                        config.main.name.to_string()
                     } else {
                         format!("{}\u{2588}", config.main.name)
                     };

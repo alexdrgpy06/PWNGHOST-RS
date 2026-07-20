@@ -402,8 +402,6 @@ impl DisplayDriver {
         // whole backend is moved into `spawn_blocking` and handed back
         // afterwards so only this write's own task blocks, not the runtime.
         let backend_start = std::time::Instant::now();
-        let width = self.config.width;
-        let height = self.config.height;
         let placeholder = Backend::Soft(SoftBackend {
             last_frame: Vec::new(),
         });
@@ -683,7 +681,7 @@ mod tests {
         let mut src = vec![0u8; packed_frame_bytes(width, height)];
         src[0] |= 1; // (x=0, y=0)
         let dst = transpose_frame(&src, width, height, DisplayRotation::Rotate90);
-        let expect_index = 0usize * height as usize + 2; // (dx=2, dy=0), out width=height=3
+        let expect_index = 2; // (dx=2, dy=0), out width=height=3
         assert_eq!((dst[expect_index / 8] >> (expect_index % 8)) & 1, 1);
         assert_eq!(dst.iter().map(|b| b.count_ones()).sum::<u32>(), 1);
     }
@@ -697,7 +695,7 @@ mod tests {
         let mut src = vec![0u8; packed_frame_bytes(width, height)];
         src[0] |= 1; // (x=0, y=0)
         let dst = transpose_frame(&src, width, height, DisplayRotation::Rotate270);
-        let expect_index = 1usize * height as usize; // (dx=0, dy=1), out width=height=3
+        let expect_index = height as usize; // (dx=0, dy=1), out width=height=3
         assert_eq!((dst[expect_index / 8] >> (expect_index % 8)) & 1, 1);
     }
 
@@ -709,7 +707,7 @@ mod tests {
         let mut src = vec![0u8; packed_frame_bytes(width, height)];
         src[0] |= 1; // (x=0, y=0)
         let dst = transpose_frame(&src, width, height, DisplayRotation::Rotate180);
-        let expect_index = 1usize * height as usize; // (dx=0, dy=1)
+        let expect_index = height as usize; // (dx=0, dy=1)
         assert_eq!((dst[expect_index / 8] >> (expect_index % 8)) & 1, 1);
     }
 }
