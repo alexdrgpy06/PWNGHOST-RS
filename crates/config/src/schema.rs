@@ -76,7 +76,11 @@ impl PwnConfig {
         ];
 
         for dir in &dirs {
-            tokio::fs::create_dir_all(dir).await?;
+            if let Err(e) = tokio::fs::create_dir_all(dir).await {
+                if e.kind() != std::io::ErrorKind::PermissionDenied {
+                    return Err(e.into());
+                }
+            }
         }
 
         // Validate personality config
@@ -175,7 +179,10 @@ fn default_lang() -> String {
     "en".to_string()
 }
 fn default_iface() -> String {
-    "wlan0".to_string()
+    // bettercap (Phase 1) needs the real nexmon monitor-mode interface,
+    // brought up by `monstart` (mon_start_cmd) -- matches real pwnagotchi's
+    // own default (`pwnagotchi/defaults.toml`: `iface = "wlan0mon"`).
+    "wlan0mon".to_string()
 }
 fn default_mon_start_cmd() -> String {
     "/usr/bin/monstart".to_string()
@@ -800,7 +807,11 @@ impl Default for FacesConfig {
     }
 }
 
-/// Bettercap configuration
+/// Bettercap configuration -- connection settings for the real bettercap
+/// REST API this agent now drives directly (`crates/bettercap`). bettercap
+/// runs as a separate process/systemd unit (same architecture as real
+/// pwnagotchi: `pwnagotchi/bettercap.py`'s `Client` talks to bettercap over
+/// this exact REST API), bound to loopback only.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BettercapConfig {
     #[serde(default = "default_handshakes_path")]
@@ -808,6 +819,34 @@ pub struct BettercapConfig {
 
     #[serde(default = "default_silence")]
     pub silence: Vec<String>,
+
+    /// bettercap's REST API host. Always loopback in this project's setup
+    /// (`api.rest.address 127.0.0.1` in the bettercap systemd unit) -- never
+    /// exposed to the network.
+    #[serde(default = "default_bettercap_hostname")]
+    pub hostname: String,
+
+    #[serde(default = "default_bettercap_port")]
+    pub port: u16,
+
+    #[serde(default = "default_bettercap_username")]
+    pub username: String,
+
+    #[serde(default = "default_bettercap_password")]
+    pub password: String,
+}
+
+fn default_bettercap_hostname() -> String {
+    "127.0.0.1".to_string()
+}
+fn default_bettercap_port() -> u16 {
+    8081
+}
+fn default_bettercap_username() -> String {
+    "pwnghost".to_string()
+}
+fn default_bettercap_password() -> String {
+    "pwnghost".to_string()
 }
 
 fn default_handshakes_path() -> String {
@@ -836,6 +875,10 @@ impl Default for BettercapConfig {
         Self {
             handshakes: default_handshakes_path(),
             silence: default_silence(),
+            hostname: default_bettercap_hostname(),
+            port: default_bettercap_port(),
+            username: default_bettercap_username(),
+            password: default_bettercap_password(),
         }
     }
 }

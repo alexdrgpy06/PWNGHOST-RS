@@ -4,7 +4,7 @@
 [main]
 name = "pwnghost"
 lang = "en"
-iface = "wlan0"
+iface = "wlan0mon"
 mon_start_cmd = "/usr/bin/monstart"
 mon_stop_cmd = "/usr/bin/monstop"
 mon_max_blind_epochs = 5
