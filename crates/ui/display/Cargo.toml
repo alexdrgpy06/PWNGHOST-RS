@@ -7,6 +7,8 @@ description = "E-ink display driver for PWNGHOST-RS"
 [dependencies]
 anyhow = { workspace = true }
 embedded-graphics = { workspace = true }
+fontdue = { workspace = true }
+png = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 pwncore = { path = "../../pwncore" }

@@ -4,6 +4,7 @@
 //! framebuffer using `embedded-graphics` and its built-in ASCII fonts.
 
 use crate::fonts;
+use crate::ttf::{self, TtfStyle};
 use anyhow::Result;
 use embedded_graphics::{
     mono_font::{ascii::FONT_6X10, ascii::FONT_9X15, MonoTextStyle},
@@ -57,18 +58,17 @@ pub struct LayoutConfig {
     pub line1_y: i32,
     pub face_x: i32,
     pub face_y: i32,
-    /// Integer upscale factor for the main face's glyph cells (16x16
-    /// base). Real pwnagotchi renders its face in a much larger font
-    /// (`fonts.setup(..., huge=35, ...)`) than the rest of the UI
-    /// (~9-10) -- rendering it at the same size as everything else was
-    /// the single biggest reason this used to look "not even close to
-    /// the original" even once every field held real data. The bitmap
-    /// glyph atlas is a fixed 16px cell (not a scalable vector font like
-    /// real pwnagotchi's), so this is an approximation of the same
-    /// visual proportion, not an exact 35pt match.
-    pub face_scale: i32,
+    /// Face font size in pixels. Real pwnagotchi's 2.13" V4 layout uses
+    /// `fonts.setup(..., huge=35, ...)` -- DejaVuSansMono-Bold at 35 px --
+    /// for the face, the dominant element on the screen. We render the same
+    /// font at the same size via `crate::ttf`, so this is an exact match to
+    /// the original rather than the old bitmap-upscale approximation.
+    pub face_size: u32,
     pub friend_face_x: i32,
     pub friend_face_y: i32,
+    /// Friend-face font size in pixels -- smaller than the main face,
+    /// matching real pwnagotchi's much smaller `friend_face` treatment.
+    pub friend_face_size: u32,
     pub friend_x: i32,
     pub friend_y: i32,
     pub line2_y: i32,
@@ -102,9 +102,10 @@ impl Default for LayoutConfig {
             status_max_chars: 20,
             face_x: 0,
             face_y: 40,
-            face_scale: 2,
+            face_size: 35,
             friend_face_x: 0,
             friend_face_y: 92,
+            friend_face_size: 16,
             friend_x: 40,
             friend_y: 94,
             line2_y: 108,
@@ -285,20 +286,20 @@ impl LayoutEngine {
             )?;
         }
 
-        // Face. Faces are kaomoji (e.g. "( ⚆_⚆)", "(♥‿‿♥)") whose glyphs
-        // are outside embedded-graphics's built-in ASCII fonts, so
-        // they're drawn from the pre-rasterized bitmap glyph atlas in
-        // `crate::fonts` instead of `big`/FONT_9X15. Drawn at
-        // `face_scale` (default 2x the base 16x16 glyph cell) so it
-        // reads as the dominant element the way real pwnagotchi's much
-        // larger `Huge` face font does, instead of blending in at the
-        // same size as every other field.
-        draw_kaomoji_line(
+        // Face. Real pwnagotchi renders this as DejaVuSansMono-Bold at 35pt
+        // (`fonts.Huge`, see `hw/waveshare2in13_V4.py::layout`), the single
+        // dominant element on the screen. We render the same font at the
+        // same size via `crate::ttf` (fontdue outline rasterization) --
+        // DejaVu covers every symbol our face set uses, so this is
+        // pixel-faithful to the original; any codepoint it lacks falls back
+        // to the Unifont bitmap atlas inside `draw_ttf_line`.
+        draw_ttf_line(
             &mut fb,
             face,
             self.config.face_x,
             self.config.face_y,
-            self.config.face_scale,
+            self.config.face_size,
+            TtfStyle::Bold,
         );
 
         // Closest mesh friend, if any -- matches real pwnagotchi's
@@ -306,12 +307,13 @@ impl LayoutEngine {
         // friend's own mood face, plus signal bars + name + handshake
         // counts), populated from `agent::MeshManager`.
         if let Some((friend_face, friend_line)) = friend {
-            draw_kaomoji_line(
+            draw_ttf_line(
                 &mut fb,
                 friend_face,
                 self.config.friend_face_x,
                 self.config.friend_face_y,
-                1,
+                self.config.friend_face_size,
+                TtfStyle::Bold,
             );
             draw_line(
                 &mut fb,
@@ -381,8 +383,8 @@ impl LayoutEngine {
         Ok(())
     }
 
-    /// Draw a kaomoji face string centered horizontally, using the
-    /// pre-rasterized bitmap glyph atlas (see `crate::fonts`).
+    /// Draw a kaomoji face string centered horizontally, using the bundled
+    /// DejaVuSansMono-Bold TTF at the face size (see `crate::ttf`).
     pub fn draw_face_centered(
         &self,
         buffer: &mut [u8],
@@ -391,10 +393,11 @@ impl LayoutEngine {
         face: &str,
     ) -> Result<()> {
         let mut fb = FrameBuffer::new(buffer, width, height);
-        let text_w = kaomoji_line_width(face, 1);
+        let px = self.config.face_size;
+        let text_w = ttf_line_width(face, px, TtfStyle::Bold);
         let x = (width as i32 - text_w) / 2;
-        let y = (height as i32 - fonts::GLYPH_CELL_H as i32) / 2;
-        draw_kaomoji_line(&mut fb, face, x, y, 1);
+        let y = (height as i32 - px as i32) / 2;
+        draw_ttf_line(&mut fb, face, x, y, px, TtfStyle::Bold);
         Ok(())
     }
 
@@ -493,75 +496,87 @@ fn wrap_status_text(text: &str, max_chars: usize) -> Vec<String> {
     lines
 }
 
-/// Draw a kaomoji/face string using the pre-rasterized bitmap glyph atlas
-/// (`crate::fonts::kaomoji_glyph`) instead of `embedded-graphics`'s built-in
-/// ASCII fonts, which lack coverage for these codepoints entirely.
+/// Draw a face/text string using the bundled DejaVuSansMono TTF at `px`
+/// pixels, matching real pwnagotchi's PIL/FreeType rendering (the face is
+/// DejaVuSansMono-Bold @ 35 px). `(x, y)` is the top-left anchor, the same
+/// convention real pwnagotchi's layout uses.
 ///
-/// Each non-combining character advances the cursor by its *own* rasterized
-/// width (see [`fonts::glyph_advance_width`], scaled by `scale`) -- GNU
-/// Unifont is dual-width, so narrow glyphs (most ASCII: `(`, `_`, `)`,
-/// space) advance half as far as wide ones (many mood-face symbols).
-/// Advancing every glyph by a uniform full-cell width, as this used to do,
-/// doubles the gap after every narrow character, which is why a face like
-/// "( ⚆_⚆)" rendered as isolated characters scattered across nearly the
-/// full panel width instead of a compact face (confirmed against a real
-/// device photo). Combining marks (e.g. U+0301 in "•́") are composited onto
-/// the previously drawn cell instead of advancing. Any codepoint the atlas
-/// doesn't cover is skipped but still advances (by a narrow-glyph width)
-/// rather than corrupting the rest of the line.
-///
-/// `scale` matters for visual fidelity against real pwnagotchi: its face
-/// renders in a much larger font (`fonts.Huge`, size 25) than the rest of
-/// the UI (`fonts.Medium`/`Bold`, size ~9-10) -- roughly 2.5x. Rendering
-/// the face at the same size as everything else (scale=1, as this used
-/// to do unconditionally) reads as "not even close to the original" even
-/// with the right characters. The main face uses scale=2 (see
-/// `draw_pwnagotchi_frame`); the friend line keeps scale=1, matching
-/// the reference layout's own much smaller friend-face treatment.
-fn draw_kaomoji_line(fb: &mut FrameBuffer<'_>, text: &str, x: i32, y: i32, scale: i32) {
-    let mut cursor_x = x;
-    let mut prev_cell: Option<(i32, i32)> = None;
-
+/// For each character we rasterize the outline via `crate::ttf` (smooth,
+/// size-accurate) and threshold its coverage into the 1bpp framebuffer.
+/// DejaVu covers every symbol our face set uses, so this is pixel-faithful
+/// to the original. For any codepoint DejaVu lacks (rare -- e.g. a CJK
+/// symbol), we fall back to the legacy Unifont bitmap atlas
+/// (`fonts::kaomoji_glyph`), upscaled to approximately `px` so it doesn't
+/// look tiny beside the TTF glyphs. Returns the total advanced width in px.
+fn draw_ttf_line(
+    fb: &mut FrameBuffer<'_>,
+    text: &str,
+    x: i32,
+    y: i32,
+    px: u32,
+    style: TtfStyle,
+) -> i32 {
+    let ascent = ttf::line_ascent(style, px);
+    let mut pen_x = x;
     for ch in text.chars() {
-        if fonts::is_combining_mark(ch) {
-            if let Some((px, py)) = prev_cell {
+        match ttf::rasterize_glyph(style, ch, px) {
+            Some(g) => {
+                // Place the glyph bitmap: its left edge at pen+left, its top
+                // edge at baseline-top where baseline = y + ascent.
+                blit_coverage(
+                    fb,
+                    &g.coverage,
+                    g.width,
+                    g.height,
+                    pen_x + g.left,
+                    y + ascent - g.top,
+                );
+                pen_x += g.advance;
+            }
+            None => {
+                // Unifont fallback for a codepoint DejaVu lacks. Upscale the
+                // 16 px cell to ~px so it visually matches the TTF glyphs.
+                let scale = ((px as i32 + 8) / 16).max(1);
                 if let Some(bits) = fonts::kaomoji_glyph(ch) {
-                    blit_glyph(fb, bits, px, py, scale);
+                    blit_glyph(fb, bits, pen_x, y, scale);
                 }
+                pen_x += ttf::advance_of(style, ch, px);
             }
-            continue;
         }
+    }
+    pen_x - x
+}
 
-        let advance = match fonts::kaomoji_glyph(ch) {
-            Some(bits) => {
-                blit_glyph(fb, bits, cursor_x, y, scale);
-                fonts::glyph_advance_width(bits)
+/// Total pixel width [`draw_ttf_line`] would occupy for `text` at `px`.
+fn ttf_line_width(text: &str, px: u32, style: TtfStyle) -> i32 {
+    text.chars().map(|c| ttf::advance_of(style, c, px)).sum()
+}
+
+/// Threshold-blit a fontdue coverage bitmap (`width * height` bytes, one per
+/// pixel, 0..=255) onto `fb` at top-left `(x, y)`. Coverage > 127 becomes
+/// ink -- a simple 1bpp threshold, which is what the e-ink panel needs.
+fn blit_coverage(
+    fb: &mut FrameBuffer<'_>,
+    coverage: &[u8],
+    width: usize,
+    height: usize,
+    x: i32,
+    y: i32,
+) {
+    for gy in 0..height {
+        for gx in 0..width {
+            if coverage[gy * width + gx] > 127 {
+                fb.set_pixel(x + gx as i32, y + gy as i32, true);
             }
-            None => fonts::GLYPH_CELL_W / 2,
-        };
-        prev_cell = Some((cursor_x, y));
-        cursor_x += advance as i32 * scale;
+        }
     }
 }
 
-/// Total pixel width [`draw_kaomoji_line`] would occupy for `text` at the
-/// given `scale` (combining marks don't add width).
-fn kaomoji_line_width(text: &str, scale: i32) -> i32 {
-    text.chars()
-        .filter(|c| !fonts::is_combining_mark(*c))
-        .map(|c| {
-            let advance = fonts::kaomoji_glyph(c)
-                .map(fonts::glyph_advance_width)
-                .unwrap_or(fonts::GLYPH_CELL_W / 2);
-            advance as i32 * scale
-        })
-        .sum()
-}
-
-/// Blit a single pre-rasterized glyph cell onto `fb` at `(x, y)` (top-left
-/// origin), each source pixel replicated as a `scale x scale` block. Bits
-/// are packed MSB-first, padded to a byte boundary per row; bit == 1 means
-/// "ink"/pixel-on.
+/// Blit a single pre-rasterized Unifont glyph cell onto `fb` at `(x, y)`
+/// (top-left origin), each source pixel replicated as a `scale x scale`
+/// block. Bits are packed MSB-first, padded to a byte boundary per row;
+/// bit == 1 means "ink". Retained only as the missing-glyph fallback path
+/// inside [`draw_ttf_line`].
 fn blit_glyph(fb: &mut FrameBuffer<'_>, bits: &[u8; fonts::GLYPH_BYTES], x: i32, y: i32, scale: i32) {
     let row_bytes = (fonts::GLYPH_CELL_W as usize).div_ceil(8);
     for gy in 0..fonts::GLYPH_CELL_H as i32 {
@@ -759,16 +774,15 @@ mod tests {
     }
 
     #[test]
-    fn test_draw_pwnagotchi_frame_face_renders_larger_than_base_cell() {
+    fn test_draw_pwnagotchi_frame_face_renders_at_ttf_size() {
         // Regression test for the "face isn't even close to the original"
-        // gap: the main face must render noticeably bigger than a single
-        // base 16x16 glyph cell (real pwnagotchi uses a much larger font
-        // for the face than the rest of the UI), not the same size as
-        // every other field.
+        // gap: the face must render at the real pwnagotchi size (35 px
+        // DejaVuSansMono-Bold), noticeably taller than the old 16 px base
+        // cell -- so there must be face ink well below `face_y + 16`.
         let (width, height, mut buffer) = new_test_buffer();
         let config = LayoutConfig::default();
-        assert!(config.face_scale >= 2, "face_scale should upscale the face, not render it 1:1");
-        let (face_x, face_y, scale) = (config.face_x as u32, config.face_y as u32, config.face_scale as u32);
+        assert_eq!(config.face_size, 35, "face should render at real pwnagotchi's 35px");
+        let (face_x, face_y, px) = (config.face_x as u32, config.face_y as u32, config.face_size);
         let engine = LayoutEngine::new(config);
         engine
             .draw_pwnagotchi_frame(
@@ -777,16 +791,15 @@ mod tests {
             )
             .unwrap();
 
-        // A 1x render would never place ink below `face_y + GLYPH_CELL_H`
-        // (the base cell's own height). Parenthesis characters span the
-        // full cell top-to-bottom, so a genuinely scaled render must put
-        // ink somewhere in the extended region a 1x render couldn't reach.
-        let base_cell_bottom = face_y + fonts::GLYPH_CELL_H;
-        let scaled_cell_bottom = face_y + fonts::GLYPH_CELL_H * scale;
+        // A 16px render would never place ink below `face_y + 16`. A 35px
+        // TTF face reaches well beyond that. The parens span most of the
+        // face height, so there must be ink in the lower part of the glyph.
+        let old_cell_bottom = face_y + 16;
+        let ttf_bottom = (face_y + px).min(height);
         assert!(
-            region_has_pixels(&buffer, width, face_x..face_x + 20, base_cell_bottom..scaled_cell_bottom),
-            "expected face ink below the base 16px cell height (in the {scale}x-scaled region), \
-             found none -- face may still be rendering at 1x"
+            region_has_pixels(&buffer, width, face_x..face_x + 30, old_cell_bottom..ttf_bottom),
+            "expected face ink below the old 16px cell (in the 35px TTF region), \
+             found none -- face may still be rendering small"
         );
     }
 
@@ -802,44 +815,36 @@ mod tests {
     }
 
     #[test]
-    fn test_kaomoji_line_width_ignores_combining_marks() {
-        // "•́" is bullet (U+2022) + combining acute (U+0301): width should
-        // count only the bullet's cell. U+2022 is a narrow glyph in the
-        // atlas (all ink in the left half of its cell -- GNU Unifont is
-        // dual-width), so its advance is half `GLYPH_CELL_W`, not the
-        // full cell (a full-cell assumption here would silently
-        // reintroduce the double-spacing bug `glyph_advance_width` fixes).
-        assert_eq!(
-            kaomoji_line_width("\u{2022}\u{0301}", 1),
-            fonts::GLYPH_CELL_W as i32 / 2
-        );
+    fn test_ttf_line_width_is_monospace_multiple() {
+        // DejaVuSansMono is monospace: a line's TTF width is N glyphs times
+        // the single-glyph advance. Every ASCII face char shares that advance.
+        let px = 35u32;
+        let single = ttf::advance_of(TtfStyle::Bold, '(', px);
+        assert_eq!(ttf_line_width("(-_-)", px, TtfStyle::Bold), single * 5);
     }
 
     #[test]
-    fn test_kaomoji_line_width_sums_mixed_narrow_and_wide_glyphs() {
-        // '(' and '_' are narrow (half-cell); U+2686 (⚆) is wide
-        // (full-cell) -- confirmed directly from the atlas data. A face
-        // like "(_⚆" should sum each glyph's own advance, not assume a
-        // uniform cell width for all three.
-        let half = fonts::GLYPH_CELL_W as i32 / 2;
-        let full = fonts::GLYPH_CELL_W as i32;
-        assert_eq!(kaomoji_line_width("(_\u{2686}", 1), half + half + full);
+    fn test_ttf_line_width_scales_with_size() {
+        // A face rendered at the 35px face size is wider than at a small size.
+        let big = ttf_line_width("(-_-)", 35, TtfStyle::Bold);
+        let small = ttf_line_width("(-_-)", 12, TtfStyle::Bold);
+        assert!(big > small);
     }
 
     #[test]
-    fn test_draw_kaomoji_line_advances_narrow_glyphs_by_half_cell() {
-        // Regression test for the "face characters scattered across the
-        // whole screen" bug: drawing two narrow glyphs back-to-back must
-        // place the second glyph's ink starting at exactly one
-        // half-cell-width away from the first, not a full cell.
-        let (width, height) = (40u32, 16u32);
+    fn test_draw_ttf_line_advances_left_to_right() {
+        // Drawing a multi-char face must place later glyphs to the right of
+        // earlier ones (monospace advance), producing a compact face across
+        // roughly `chars * advance` pixels -- not scattered across the panel.
+        let (width, height) = (250u32, 40u32);
         let mut buffer = vec![0u8; (width as usize * height as usize).div_ceil(8)];
         let mut fb = FrameBuffer::new(&mut buffer, width, height);
-        draw_kaomoji_line(&mut fb, "((", 0, 0, 1);
-        let half = fonts::GLYPH_CELL_W / 2;
-        assert!(
-            region_has_pixels(&buffer, width, half..half + 8, 0..16),
-            "expected second '(' glyph's ink starting at half-cell x={half}"
-        );
+        let advanced = draw_ttf_line(&mut fb, "(-_-)", 0, 0, 35, TtfStyle::Bold);
+        let expected = ttf_line_width("(-_-)", 35, TtfStyle::Bold);
+        assert_eq!(advanced, expected);
+        // The 5-glyph face at ~21px advance should span well under half the
+        // 250px panel, i.e. it's compact, not spread across the screen.
+        assert!(advanced < 130, "face should be compact, spanned {advanced}px");
+        assert!(advanced > 40, "face should have real width, spanned {advanced}px");
     }
 }

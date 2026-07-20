@@ -190,8 +190,10 @@ pub fn migrate_config(legacy: LegacyConfig) -> super::schema::PwnConfig {
         config.personality.min_recon_time = 5;
         config.personality.max_recon_time = 30;
         config.personality.hop_recon_time = 10;
-        config.personality.deauth = p.deauth.unwrap_or(false);
-        config.personality.associate = p.associate.unwrap_or(false);
+        // Real pwnagotchi defaults deauth on; a migrated config that
+        // didn't set it should inherit that, not silently go passive.
+        config.personality.deauth = p.deauth.unwrap_or(true);
+        config.personality.associate = p.associate.unwrap_or(true);
         config.personality.min_rssi = -80;
         config.personality.position_x = p.position_x.unwrap_or(0);
         config.personality.position_y = p.position_y.unwrap_or(34);

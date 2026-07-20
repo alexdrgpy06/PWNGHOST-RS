@@ -6,6 +6,7 @@ pub mod fonts;
 mod hardware;
 mod kaomoji_font_data;
 pub mod layout;
+pub mod ttf;
 
 pub use driver::{DisplayConfig, DisplayDriver, DisplayRotation, DisplayType};
 pub use fonts::FontRegistry;

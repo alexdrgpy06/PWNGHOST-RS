@@ -38,8 +38,13 @@ penalty_reboot = -50
 min_recon_time = 5
 max_recon_time = 30
 hop_recon_time = 10
-deauth = false
-associate = false
+# Active deauthentication of discovered APs to force clients to
+# re-handshake -- this is real pwnagotchi's core "pwning" behavior and its
+# own default. With this off, AngryOxide runs purely passive (--disable-
+# deauth) and captures far fewer handshakes. AngryOxide does the actual
+# deauthing autonomously; this flag just controls whether it's told to.
+deauth = true
+associate = true
 min_rssi = -80
 position_x = 0
 position_y = 34

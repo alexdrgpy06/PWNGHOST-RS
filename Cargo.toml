@@ -32,6 +32,13 @@ axum = { version = "0.7", features = ["ws"] }
 tera = "1.0"
 tower-http = { version = "0.6", features = ["cors"] }
 embedded-graphics = "0.8"
+# Pure-Rust TrueType/OpenType software rasterizer for the face + text.
+# Real pwnagotchi renders the face as DejaVuSansMono-Bold at 35pt via
+# FreeType; fontdue gives us equivalent outline rasterization with no C
+# dependency (cross-compiles cleanly to ARMv6). `image`/png encoding is
+# also used to serve the live framebuffer to the web UI (Phase 3).
+fontdue = "0.9"
+png = "0.17"
 ssd1306 = { version = "0.10", features = ["graphics"] }
 embedded-hal = "1.0"
 epd-waveshare = "0.6"

@@ -169,6 +169,40 @@ fn closest_peer_face_and_line(peers: &[pwncore::Peer]) -> Option<(String, String
     Some((face, line))
 }
 
+/// Choose the face to draw on a given ~1s display tick, animating the gaze
+/// during passive recon the way real pwnagotchi does in its `ui/view.py`
+/// `wait()` loop (alternating LOOK_R/LOOK_L, using the happy gaze variants
+/// when in a good mood). This is most of what makes the idle screen feel
+/// alive; the agent's own epoch/mood cycle runs far slower than 1s, so
+/// without animating here the face would freeze between epochs.
+///
+/// Only the passive/neutral recon moods animate. Genuine event moods -- a
+/// capture (Happy/Excited/Grateful), Sad/Angry/Lonely/Bored, uploading, a
+/// friend greeting, sleeping -- are returned unchanged (as `base_face`,
+/// the real mood face cached from the last epoch tick) because they carry
+/// meaning the scan animation must not paint over.
+fn animated_face(
+    mood: pwncore::Mood,
+    base_face: &'static str,
+    tick: u64,
+    good_mood: bool,
+) -> &'static str {
+    use pwncore::Mood;
+    match mood {
+        // Neutral recon/awake states: sweep the gaze left/right each tick.
+        Mood::LookR | Mood::LookL | Mood::Awake => {
+            let look = match (tick % 2 == 0, good_mood) {
+                (true, false) => Mood::LookR,
+                (false, false) => Mood::LookL,
+                (true, true) => Mood::LookRHappy,
+                (false, true) => Mood::LookLHappy,
+            };
+            agent::faces::face_for_mood(look)
+        }
+        _ => base_face,
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -438,6 +472,12 @@ async fn main() -> anyhow::Result<()> {
     // friend) is cheap and side-effect-free to recompute every second.
     let mut display_interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
     let mut latest_face: &str = agent::faces::face_for_mood(agent.current_mood());
+    // Counter driving the per-second face "looking around" animation (see
+    // `animated_face`). Real pwnagotchi's idle screen feels alive because
+    // the face alternates gaze direction roughly every second during recon;
+    // our epoch tick is far slower than 1s, so without animating here the
+    // face would sit frozen between epochs.
+    let mut display_tick: u64 = 0;
     // systemd watchdog ping. Harmless if the unit doesn't set
     // `WatchdogSec=`; ready to use as soon as it does.
     let mut watchdog_interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
@@ -698,6 +738,7 @@ async fn main() -> anyhow::Result<()> {
                 // second instead of only when the (much slower) agent
                 // tick happens to fire.
                 if let Some(ref d) = display {
+                    display_tick = display_tick.wrapping_add(1);
                     let uptime = format!("{}s", agent.start.elapsed().as_secs());
                     let stats = agent.personality.stats();
                     let phrase = agent.personality.get_phrase(agent.current_mood());
@@ -709,14 +750,41 @@ async fn main() -> anyhow::Result<()> {
                         .map(|mp| mp.peer)
                         .collect();
                     let friend = closest_peer_face_and_line(&peers);
+                    // Animate the gaze during passive recon so the idle
+                    // screen moves every second like real pwnagotchi,
+                    // instead of freezing on `latest_face` until the next
+                    // (much slower) epoch tick. Event moods (a capture,
+                    // sad/angry/bored, uploading, a friend) are shown as-is
+                    // -- they carry real meaning and shouldn't be
+                    // overridden by the scan animation. "Good mood" (happy
+                    // gaze variant) when peers are nearby or we just caught
+                    // something, mirroring real pwnagotchi's
+                    // `in_good_mood` gate in its `wait()` loop.
+                    let good_mood = !peers.is_empty()
+                        || agent.epoch_tracker.current.handshakes_this_epoch > 0;
+                    let face = animated_face(
+                        agent.current_mood(),
+                        latest_face,
+                        display_tick,
+                        good_mood,
+                    );
+                    // Blinking name cursor, matching real pwnagotchi's
+                    // `_refresh_handler` trailing block that toggles at fps
+                    // -- a small always-moving element so the screen never
+                    // looks hung even when nothing else changed this second.
+                    let name = if display_tick % 2 == 0 {
+                        format!("{}", config.main.name)
+                    } else {
+                        format!("{}\u{2588}", config.main.name)
+                    };
                     if let Err(e) = d
                         .draw_pwnagotchi_frame(
                             agent.current_channel(),
                             aps_count,
                             &uptime,
-                            &config.main.name,
+                            &name,
                             &phrase,
-                            latest_face,
+                            face,
                             agent.epoch_tracker.current.handshakes_this_epoch,
                             stats.handshakes,
                             stats.level,

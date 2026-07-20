@@ -448,8 +448,11 @@ impl Default for PersonalityConfig {
             min_recon_time: default_min_recon(),
             max_recon_time: default_max_recon(),
             hop_recon_time: default_hop_recon(),
-            deauth: false,
-            associate: false,
+            // Real pwnagotchi's core behavior: actively deauth discovered
+            // APs to force handshakes. AngryOxide does the deauthing
+            // autonomously unless told --disable-deauth.
+            deauth: true,
+            associate: true,
             min_rssi: default_min_rssi(),
             position_x: 0,
             position_y: 34,
