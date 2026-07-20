@@ -797,8 +797,19 @@ async fn main() -> anyhow::Result<()> {
                         .await
                     {
                         warn!("Display draw failed: {}", e);
-                    } else if let Err(e) = d.update(true).await {
-                        warn!("Display update failed: {}", e);
+                    } else {
+                        // Publish the freshly-drawn frame to the web UI's
+                        // live view (`/ui`) before pushing it to the panel,
+                        // so the browser mirrors exactly what the e-ink shows
+                        // -- the same model as real pwnagotchi's PNG frame.
+                        if let Some(ref state_arc) = web_state {
+                            if let Ok(png) = d.frame_png().await {
+                                state_arc.write().await.frame_png = png;
+                            }
+                        }
+                        if let Err(e) = d.update(true).await {
+                            warn!("Display update failed: {}", e);
+                        }
                     }
                 }
             }

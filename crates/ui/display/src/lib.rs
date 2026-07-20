@@ -137,6 +137,43 @@ impl Display {
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
     }
+
+    /// Encode the current framebuffer as a PNG (grayscale, ink = black on
+    /// white), for the web UI's live display view -- real pwnagotchi serves
+    /// exactly this: the same rendered frame the panel shows, as a PNG at
+    /// `/ui` (see `pwnagotchi/ui/web/handler.py::ui()`). The internal
+    /// framebuffer is 1bpp packed (bit == 1 => ink); we expand it to an
+    /// 8-bit grayscale image so any browser can display it without a custom
+    /// decoder. At 250x122 this is a few KB and encodes in well under a
+    /// millisecond, cheap enough to regenerate on every 1s display tick.
+    pub async fn frame_png(&self) -> Result<Vec<u8>> {
+        let fb = self.framebuffer.lock().await;
+        let (w, h) = (self.width, self.height);
+        let mut gray = vec![0xFFu8; (w as usize) * (h as usize)];
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y as usize) * (w as usize) + (x as usize);
+                let byte = idx / 8;
+                let bit = idx % 8;
+                if byte < fb.len() && (fb[byte] >> bit) & 1 != 0 {
+                    gray[idx] = 0x00; // ink
+                }
+            }
+        }
+        let mut out = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut out, w, h);
+            encoder.set_color(png::ColorType::Grayscale);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder
+                .write_header()
+                .map_err(|e| anyhow::anyhow!("png header: {e}"))?;
+            writer
+                .write_image_data(&gray)
+                .map_err(|e| anyhow::anyhow!("png data: {e}"))?;
+        }
+        Ok(out)
+    }
 }
 
 /// Get face for mood

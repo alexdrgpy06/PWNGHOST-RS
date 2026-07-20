@@ -9,7 +9,8 @@ use tower_http::services::ServeDir;
 use tracing::info;
 
 use crate::api::{
-    get_config, get_handshakes, get_peers, get_session, get_status, update_config, AppState,
+    get_config, get_handshakes, get_peers, get_session, get_status, get_ui_frame, update_config,
+    AppState,
 };
 
 /// Create the web application router
@@ -20,6 +21,9 @@ pub fn create_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/api/config", get(get_config).post(update_config))
         .route("/api/peers", get(get_peers))
         .route("/api/handshakes", get(get_handshakes))
+        // Live e-ink frame as PNG, polled ~1s by the dashboard -- the same
+        // "live view" real pwnagotchi serves at `/ui`.
+        .route("/ui", get(get_ui_frame))
         .route("/ws", get(websocket_handler))
         .nest_service("/static", ServeDir::new("static"))
         .route("/", get(index_handler))

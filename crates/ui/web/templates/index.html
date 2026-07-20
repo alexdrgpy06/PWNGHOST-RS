@@ -94,6 +94,13 @@
   .activity-line.warn .lvl, .activity-line.warn .msg { color: #d8a13a; }
   .activity-line.priority .lvl { color: var(--accent); }
 
+  .live { text-align: center; }
+  .eink {
+    display: block; margin: 0.25rem auto 0; width: 100%; max-width: 500px;
+    image-rendering: pixelated; background: #fff; border: 1px solid var(--border);
+    border-radius: 6px; aspect-ratio: 250 / 122;
+  }
+
   @media (min-width: 720px) {
     .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
   }
@@ -104,6 +111,11 @@
     <h1 id="agent-name">PWNGHOST-RS</h1>
     <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></div>
   </header>
+
+  <section class="live">
+    <div class="section-head"><h2>Live display</h2><span class="k" id="live-hint">the actual e-ink frame</span></div>
+    <img id="ui" class="eink" alt="live display" />
+  </section>
 
   <div class="top">
     <div class="face" id="face">—</div>
@@ -439,6 +451,19 @@ function connectWs() {
 
   ws.onerror = () => { ws.close(); };
 }
+
+// Live e-ink frame: re-fetch /ui once a second with a cache-buster, exactly
+// like real pwnagotchi's dashboard. The <img> shows the actual rendered
+// frame the panel is displaying.
+function refreshUiFrame() {
+  const img = $('ui');
+  if (!img) return;
+  img.src = '/ui?' + Date.now();
+}
+$('ui').addEventListener('error', () => { $('live-hint').textContent = 'display not ready'; });
+$('ui').addEventListener('load', () => { $('live-hint').textContent = 'the actual e-ink frame'; });
+refreshUiFrame();
+setInterval(refreshUiFrame, 1000);
 
 loadStatus();
 loadPeers();
