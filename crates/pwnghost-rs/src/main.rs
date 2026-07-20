@@ -103,22 +103,119 @@ fn read_iface_mac(iface: &str) -> pwncore::MacAddr {
         .unwrap_or_default()
 }
 
+/// CPU temperature in Celsius, for the display's resource footer. `None`
+/// if unreadable (no thermal zone, or a non-Linux dev environment).
+fn read_cpu_temp() -> Option<f32> {
+    std::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp")
+        .ok()
+        .and_then(|raw| parse_cpu_temp_millidegrees(&raw))
+}
+
+fn parse_cpu_temp_millidegrees(raw: &str) -> Option<f32> {
+    raw.trim().parse::<f32>().ok().map(|milli_c| milli_c / 1000.0)
+}
+
+/// (used_mb, total_mb) RAM, for the display's resource footer. `(0, 0)` if
+/// `/proc/meminfo` is unreadable.
+fn read_ram_usage_mb() -> (u64, u64) {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .map(|raw| parse_ram_usage_mb(&raw))
+        .unwrap_or((0, 0))
+}
+
+fn parse_ram_usage_mb(meminfo: &str) -> (u64, u64) {
+    let mut total_kb = 0u64;
+    let mut avail_kb = 0u64;
+    for line in meminfo.lines() {
+        if let Some(kb) = parse_meminfo_field_kb(line, "MemTotal:") {
+            total_kb = kb;
+        } else if let Some(kb) = parse_meminfo_field_kb(line, "MemAvailable:") {
+            avail_kb = kb;
+        }
+    }
+    ((total_kb.saturating_sub(avail_kb)) / 1024, total_kb / 1024)
+}
+
+fn parse_meminfo_field_kb(line: &str, prefix: &str) -> Option<u64> {
+    line.strip_prefix(prefix)?
+        .trim()
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// (face, line) for the display's "friend" fields: the strongest-signal
+/// active mesh peer's own mood face, plus signal bars + name +
+/// handshakes shared -- matches real pwnagotchi's
+/// `View.set_closest_peer`/`friend_face`/`friend_name` (same RSSI
+/// thresholds for the 1-4 signal bars, same "peer's own face" idea via
+/// `peer.face()`).
+fn closest_peer_face_and_line(peers: &[pwncore::Peer]) -> Option<(String, String)> {
+    let peer = peers.iter().max_by_key(|p| p.signal)?;
+    let num_bars = if peer.signal >= -67 {
+        4
+    } else if peer.signal >= -70 {
+        3
+    } else if peer.signal >= -80 {
+        2
+    } else {
+        1
+    };
+    let bars: String = "|".repeat(num_bars) + &".".repeat(4 - num_bars);
+    let face = agent::faces::face_for_mood(peer.mood).to_string();
+    let line = format!("{bars} {} {}", peer.name, peer.handshakes_shared);
+    Some((face, line))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(&args.log_level))
-        .init();
-
-    info!("Starting PWNGHOST-RS v{}", env!("CARGO_PKG_VERSION"));
-
-    // Load configuration
+    // Config has to load before logging is initialized -- the log file
+    // path comes from `config.toml`'s `[main.log] path`. Previously
+    // logging was initialized first, unconditionally to stdout only, so
+    // that config value was silently never honored: no file was ever
+    // created there, no matter what config.toml said.
     let mut config = load_config(&args.config).await?;
     if let Some(iface) = args.interface {
         config.main.iface = iface;
     }
+
+    // Non-rotating (exact filename, no date suffix) so this matches the
+    // literal path config.toml (and other tooling expecting to find it
+    // there, e.g. the `logtail` Lua plugin) specifies -- tracing-
+    // appender's rotating writers append a date suffix to the filename
+    // instead, which would silently break anything reading the plain
+    // path. `config.toml`'s `[main.log.rotation]` size-based rotation
+    // isn't implemented here (a real, separate follow-up); logging to a
+    // real file that actually exists is strictly better than the
+    // previous stdout-only behavior even without it.
+    let log_path = std::path::Path::new(&config.main.log.path);
+    let log_dir = log_path.parent().filter(|p| !p.as_os_str().is_empty());
+    let log_file_name = log_path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("pwnghost.log");
+    if let Some(dir) = log_dir {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("warning: could not create log directory {dir:?}: {e}");
+        }
+    }
+    let file_appender =
+        tracing_appender::rolling::never(log_dir.unwrap_or_else(|| std::path::Path::new(".")), log_file_name);
+    let (non_blocking_file, _log_guard) = tracing_appender::non_blocking(file_appender);
+
+    // Initialize logging: journal (stdout, systemd captures this via
+    // StandardOutput=journal) and the real log file, together.
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new(&args.log_level))
+        .with_writer(std::io::stdout.and(non_blocking_file))
+        .init();
+
+    info!("Starting PWNGHOST-RS v{}", env!("CARGO_PKG_VERSION"));
 
     // Apply firmware patches on first boot
     if args.patch_firmware {
@@ -141,9 +238,16 @@ async fn main() -> anyhow::Result<()> {
     // netlink, so it must be handed a plain interface name. The output
     // prefix points into the capture staging dir so the filesystem watcher
     // and the capture pipeline agree on where files show up.
+    // `whitelist`/`personality.deauth` are real, user-configurable
+    // settings (`config.toml`'s `[main] whitelist = []` and
+    // `[personality] deauth = false`) that previously never reached
+    // AngryOxide at all -- it was always spawned with an empty whitelist
+    // and deauth left enabled regardless of what the user configured.
     let ao_config = angryoxide::args::AngryOxideConfig {
         interface: config.main.iface.clone(),
         output: Some(staging_dir.join("session")),
+        whitelist: config.main.whitelist.clone(),
+        disable_deauth: !config.personality.deauth,
         ..angryoxide::args::AngryOxideConfig::default()
     };
     let ao_handle = init_angryoxide(&ao_config).await?;
@@ -198,6 +302,16 @@ async fn main() -> anyhow::Result<()> {
     // Keep a handle to the shared app state before `web_server` is consumed
     // by `serve()` below, so the tick loop can push live updates to it.
     let web_state = web_server.as_ref().map(|w| w.state());
+    // `AppState::default()` starts with `PwnConfig::default()`, not the
+    // config actually loaded above -- `/api/config` (and the web UI's
+    // config viewer) would otherwise always show defaults regardless of
+    // what's really in config.toml. `config_path` is what `update_config`
+    // writes back to.
+    if let Some(ref state_arc) = web_state {
+        let mut state = state_arc.write().await;
+        state.config = config.clone();
+        state.config_path = args.config.clone();
+    }
 
     // Create agent
     let mut agent = Agent::new(agent::Personality::new(config.personality.clone().into()));
@@ -296,7 +410,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(d) = display.as_ref() {
         if let Err(e) = d.init().await {
             error!(
-                "Display hardware init failed, continuing without a display: {}",
+                "Display hardware init failed, continuing without a display: {:?}",
                 e
             );
             display = None;
@@ -310,6 +424,20 @@ async fn main() -> anyhow::Result<()> {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
         config.oxigotchi.epoch_duration as u64,
     ));
+    // Display refresh, decoupled from the (much slower, `epoch_duration`-
+    // paced) agent tick above -- confirmed on real hardware that tying
+    // the display to the epoch interval directly made it feel static
+    // compared to real pwnagotchi, which redraws roughly once a second
+    // (`ui.fps=1` is the common e-ink default there) regardless of how
+    // often the underlying recon/decision cycle actually runs. 1s
+    // matches that convention; this project has no `ui.fps` config knob
+    // yet to make it tunable. `latest_face` is the only piece of drawn
+    // state that can't be safely recomputed outside `agent.tick()`
+    // (calling it again here would double-advance epoch state) --
+    // everything else the fast tick draws (stats, phrase, aps, mode,
+    // friend) is cheap and side-effect-free to recompute every second.
+    let mut display_interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+    let mut latest_face: &str = agent::faces::face_for_mood(agent.current_mood());
     // systemd watchdog ping. Harmless if the unit doesn't set
     // `WatchdogSec=`; ready to use as soon as it does.
     let mut watchdog_interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
@@ -332,6 +460,14 @@ async fn main() -> anyhow::Result<()> {
         warn!("sd_notify READY=1 failed: {}", e);
     }
 
+    // Real pwnagotchi fires plugins' `on_ready` once at startup, after
+    // everything else is up -- previously the only hook ever invoked was
+    // `on_epoch`, so plugins needing one-time setup (grid announcing this
+    // unit, webcfg priming state, etc.) never got a chance to run it.
+    if let Err(e) = agent.plugins.on_ready().await {
+        warn!("Plugin on_ready hook failed: {}", e);
+    }
+
     loop {
         tokio::select! {
             event = ao_handle.recv_event(), if ao_events_open => {
@@ -341,6 +477,21 @@ async fn main() -> anyhow::Result<()> {
                             event,
                             angryoxide::parser::AoEvent::HandshakeFileWritten(_)
                         );
+
+                        // AO's real-time activity narration (channel hops,
+                        // associations, deauths, etc.) was previously only
+                        // ever logged via `agent.handle_event` -- reaching
+                        // journalctl but nowhere in the UI, which is why
+                        // recon/pwning activity looked invisible even
+                        // though AO was genuinely doing it in the
+                        // background. Surface it to the web dashboard too.
+                        if let angryoxide::parser::AoEvent::StatusLine { level, message } = &event {
+                            if let Some(ref state_arc) = web_state {
+                                let ws = state_arc.read().await.ws_manager.clone();
+                                ws.broadcast_ao_activity(format!("{level:?}"), message.clone());
+                            }
+                        }
+
                         agent.handle_event(&event);
 
                         // A handshake-shaped file showed up in AO's output
@@ -357,6 +508,18 @@ async fn main() -> anyhow::Result<()> {
                                                 hs.bssid, hs.handshake_type
                                             );
                                             agent.mark_handshake_captured(hs.bssid);
+
+                                            if let Err(e) = agent
+                                                .plugins
+                                                .on_handshake(
+                                                    &hs.bssid.to_string(),
+                                                    hs.ssid.as_deref().unwrap_or(""),
+                                                    &hs.hashcat_path,
+                                                )
+                                                .await
+                                            {
+                                                warn!("Plugin on_handshake hook failed: {}", e);
+                                            }
 
                                             if let Some(ref state_arc) = web_state {
                                                 let ws = state_arc.read().await.ws_manager.clone();
@@ -408,38 +571,23 @@ async fn main() -> anyhow::Result<()> {
                     warn!("Plugin on_epoch hook failed: {}", e);
                 }
 
-                // Update display with the current frame
-                if let Some(ref d) = display {
-                    let uptime = format!("{}s", agent.start.elapsed().as_secs());
-                    let mode = format!("{:?}", agent.current_mood());
-                    if let Err(e) = d
-                        .draw_pwnagotchi_frame(
-                            agent.current_channel(),
-                            0,
-                            false,
-                            &uptime,
-                            &config.main.name,
-                            "",
-                            face,
-                            agent.epoch_tracker.current.handshakes_this_epoch,
-                            0,
-                            &mode,
-                            None,
-                            0,
-                            0,
-                        )
-                        .await
-                    {
-                        warn!("Display draw failed: {}", e);
-                    } else if let Err(e) = d.update(true).await {
-                        warn!("Display update failed: {}", e);
-                    }
-                }
+                // Real stats, shared by both the web dashboard below and
+                // (recomputed fresh every second) the display-refresh
+                // tick further down.
+                let stats = agent.personality.stats();
+                let mood_str = format!("{:?}", agent.current_mood());
+                let aps_count = agent.aps_count();
+                let cpu_temp = read_cpu_temp();
+                let (ram_used_mb, ram_total_mb) = read_ram_usage_mb();
+                // Cache the face for the faster, decoupled display-refresh
+                // tick below -- `agent.tick()` (which produced it) also
+                // advances epoch state, so it can't be safely re-derived
+                // outside this slower interval the way the rest of the
+                // drawn state can.
+                latest_face = face;
 
                 // Push live state to the web UI so the dashboard isn't static.
                 if let Some(ref state_arc) = web_state {
-                    let stats = agent.personality.stats();
-                    let mood_str = format!("{:?}", agent.current_mood());
                     let mood_changed = previous_mood != agent.current_mood();
 
                     {
@@ -453,13 +601,16 @@ async fn main() -> anyhow::Result<()> {
                         state.level = stats.level;
                         state.xp = stats.xp;
                         state.peers = peers.clone();
+                        state.cpu_temp = cpu_temp;
+                        state.ram_used = ram_used_mb;
+                        state.ram_total = ram_total_mb;
                     }
 
                     let ws = state_arc.read().await.ws_manager.clone();
                     ws.broadcast_session(
                         agent.total_epochs(),
                         agent.start.elapsed().as_secs(),
-                        agent.aps_count(),
+                        aps_count,
                         agent.epoch_tracker.current.handshakes_this_epoch,
                         agent.current_channel(),
                         mood_str.clone(),
@@ -537,6 +688,52 @@ async fn main() -> anyhow::Result<()> {
                     agent::HealingAction::None => {}
                 }
             }
+            _ = display_interval.tick() => {
+                // Redraws every second regardless of the (much slower)
+                // agent/epoch cadence above -- matches real pwnagotchi's
+                // `ui.fps=1` e-ink convention. Only `latest_face` is
+                // cached from the epoch tick; everything else here is
+                // cheap and side-effect-free to recompute fresh, so the
+                // uptime clock and current stats visibly move every
+                // second instead of only when the (much slower) agent
+                // tick happens to fire.
+                if let Some(ref d) = display {
+                    let uptime = format!("{}s", agent.start.elapsed().as_secs());
+                    let stats = agent.personality.stats();
+                    let phrase = agent.personality.get_phrase(agent.current_mood());
+                    let aps_count = agent.aps_count();
+                    let peers: Vec<pwncore::Peer> = mesh_manager
+                        .active_peers()
+                        .await
+                        .into_iter()
+                        .map(|mp| mp.peer)
+                        .collect();
+                    let friend = closest_peer_face_and_line(&peers);
+                    if let Err(e) = d
+                        .draw_pwnagotchi_frame(
+                            agent.current_channel(),
+                            aps_count,
+                            &uptime,
+                            &config.main.name,
+                            &phrase,
+                            latest_face,
+                            agent.epoch_tracker.current.handshakes_this_epoch,
+                            stats.handshakes,
+                            stats.level,
+                            stats.xp,
+                            "AUTO",
+                            friend
+                                .as_ref()
+                                .map(|(face, line)| (face.as_str(), line.as_str())),
+                        )
+                        .await
+                    {
+                        warn!("Display draw failed: {}", e);
+                    } else if let Err(e) = d.update(true).await {
+                        warn!("Display update failed: {}", e);
+                    }
+                }
+            }
             _ = watchdog_interval.tick() => {
                 if let Err(e) = sd_notify::watchdog() {
                     warn!("sd_notify WATCHDOG=1 failed: {}", e);
@@ -578,4 +775,76 @@ async fn main() -> anyhow::Result<()> {
 
     info!("PWNGHOST-RS stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cpu_temp_millidegrees() {
+        assert_eq!(parse_cpu_temp_millidegrees("45123\n"), Some(45.123));
+        assert_eq!(parse_cpu_temp_millidegrees("not a number"), None);
+        assert_eq!(parse_cpu_temp_millidegrees(""), None);
+    }
+
+    #[test]
+    fn test_closest_peer_face_and_line_none_when_no_peers() {
+        assert_eq!(closest_peer_face_and_line(&[]), None);
+    }
+
+    #[test]
+    fn test_closest_peer_face_and_line_picks_strongest_signal() {
+        let mut weak = pwncore::Peer::new(pwncore::MacAddr::default(), "far".to_string(), 6, -85);
+        weak.handshakes_shared = 1;
+        let mut strong =
+            pwncore::Peer::new(pwncore::MacAddr::default(), "close".to_string(), 6, -60);
+        strong.handshakes_shared = 5;
+        let (_face, line) = closest_peer_face_and_line(&[weak, strong]).unwrap();
+        assert!(line.contains("close"));
+        assert!(line.contains('5'));
+        assert!(line.starts_with("||||"), "strong signal should show 4 bars: {line}");
+    }
+
+    #[test]
+    fn test_closest_peer_face_and_line_weak_signal_shows_one_bar() {
+        let peer = pwncore::Peer::new(pwncore::MacAddr::default(), "far".to_string(), 1, -90);
+        let (_face, line) = closest_peer_face_and_line(&[peer]).unwrap();
+        assert!(line.starts_with("|..."), "weak signal should show 1 bar: {line}");
+    }
+
+    #[test]
+    fn test_parse_meminfo_field_kb() {
+        assert_eq!(
+            parse_meminfo_field_kb("MemTotal:         474088 kB", "MemTotal:"),
+            Some(474088)
+        );
+        assert_eq!(
+            parse_meminfo_field_kb("MemAvailable:     356792 kB", "MemAvailable:"),
+            Some(356792)
+        );
+        assert_eq!(parse_meminfo_field_kb("MemTotal:         474088 kB", "Cached:"), None);
+    }
+
+    #[test]
+    fn test_parse_ram_usage_mb() {
+        let meminfo = "\
+MemTotal:         474088 kB
+MemFree:          200000 kB
+MemAvailable:     356792 kB
+Buffers:           10000 kB
+";
+        let (used_mb, total_mb) = parse_ram_usage_mb(meminfo);
+        // 474088 - 356792 = 117296 kB -> 114 MB (integer division)
+        assert_eq!(used_mb, 114);
+        // 474088 kB / 1024 = 462 MB (integer division)
+        assert_eq!(total_mb, 462);
+    }
+
+    #[test]
+    fn test_parse_ram_usage_mb_missing_fields_yields_zero() {
+        let (used_mb, total_mb) = parse_ram_usage_mb("SomeOtherField: 123 kB\n");
+        assert_eq!(used_mb, 0);
+        assert_eq!(total_mb, 0);
+    }
 }

@@ -57,9 +57,22 @@ pub async fn update_config(
     Json(config): Json<config::PwnConfig>,
 ) -> Json<serde_json::Value> {
     let mut state = state.write().await;
-    state.config = config;
-    // Save to disk would happen here
-    Json(serde_json::json!({"status": "ok"}))
+    let path = state.config_path.clone();
+    // Previously this only updated in-memory state -- a POST here looked
+    // like it worked (200 "ok") but the change was gone on next restart,
+    // and never touched the file the running agent itself reads config
+    // from. `config::save_config` already existed (used by config
+    // migration) and was simply never called from here.
+    match config::save_config(&config, &path).await {
+        Ok(()) => {
+            state.config = config;
+            Json(serde_json::json!({"status": "ok"}))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to persist config to {:?}: {}", path, e);
+            Json(serde_json::json!({"status": "error", "message": e.to_string()}))
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -69,6 +82,8 @@ pub struct PeerResponse {
     pub channel: u8,
     pub mood: String,
     pub level: u32,
+    pub signal: i16,
+    pub handshakes_shared: u32,
     pub last_seen: i64,
 }
 
@@ -84,6 +99,8 @@ pub async fn get_peers(State(state): State<Arc<RwLock<AppState>>>) -> Json<Vec<P
                 channel: p.channel,
                 mood: format!("{:?}", p.mood),
                 level: p.level,
+                signal: p.signal,
+                handshakes_shared: p.handshakes_shared,
                 last_seen: p.last_seen.timestamp(),
             })
             .collect(),
@@ -182,6 +199,11 @@ pub struct AppState {
     pub battery: Option<u8>,
     pub charging: bool,
     pub ws_manager: Arc<crate::ws::WebSocketManager>,
+    /// Where `config` was loaded from -- `update_config` writes back here.
+    /// Defaults to `/etc/pwnghost/config.toml` (the real path this
+    /// project's systemd unit passes via `--config`), but `main.rs` sets
+    /// this to whatever path was actually used at startup.
+    pub config_path: std::path::PathBuf,
 }
 
 impl Default for AppState {
@@ -205,6 +227,52 @@ impl Default for AppState {
             battery: None,
             charging: false,
             ws_manager: Arc::new(crate::ws::WebSocketManager::new()),
+            config_path: std::path::PathBuf::from("/etc/pwnghost/config.toml"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_update_config_persists_to_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let mut state = AppState {
+            config_path: path.clone(),
+            ..AppState::default()
+        };
+        state.config.main.name = "test-persisted-name".to_string();
+        let state = Arc::new(RwLock::new(state));
+
+        let mut new_config = config::PwnConfig::default();
+        new_config.main.name = "renamed-via-api".to_string();
+
+        let response = update_config(State(state.clone()), Json(new_config)).await;
+        assert_eq!(response.0["status"], "ok");
+
+        let on_disk = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(on_disk.contains("renamed-via-api"));
+
+        let reloaded = config::load_config(&path).await.unwrap();
+        assert_eq!(reloaded.main.name, "renamed-via-api");
+        assert_eq!(state.read().await.config.main.name, "renamed-via-api");
+    }
+
+    #[tokio::test]
+    async fn test_update_config_reports_error_on_unwritable_path() {
+        // A path whose parent directory doesn't exist can't be written --
+        // this must surface as a real error, not a false "ok".
+        let state = AppState {
+            config_path: std::path::PathBuf::from("/nonexistent-dir-xyz/config.toml"),
+            ..AppState::default()
+        };
+        let state = Arc::new(RwLock::new(state));
+
+        let response = update_config(State(state), Json(config::PwnConfig::default())).await;
+        assert_eq!(response.0["status"], "error");
     }
 }

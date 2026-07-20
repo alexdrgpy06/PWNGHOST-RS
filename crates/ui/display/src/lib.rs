@@ -59,17 +59,16 @@ impl Display {
         &self,
         channel: u8,
         aps_count: usize,
-        bt_connected: bool,
         uptime: &str,
         name: &str,
-        phrase: &str,
+        status: &str,
         face: &str,
         handshakes: u32,
+        total_handshakes: u32,
         level: u32,
+        xp: u32,
         mode: &str,
-        cpu_temp: Option<f32>,
-        ram_used: u64,
-        ram_total: u64,
+        friend: Option<(&str, &str)>,
     ) -> Result<()> {
         let mut fb = self.framebuffer.lock().await;
         fb.fill(0);
@@ -81,17 +80,16 @@ impl Display {
             self.height,
             channel,
             aps_count,
-            bt_connected,
             uptime,
             name,
-            phrase,
+            status,
             face,
             handshakes,
+            total_handshakes,
             level,
+            xp,
             mode,
-            cpu_temp,
-            ram_used,
-            ram_total,
+            friend,
         )?;
 
         Ok(())

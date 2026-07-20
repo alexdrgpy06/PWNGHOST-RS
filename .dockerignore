@@ -1,0 +1,11 @@
+target/
+build-artifacts/
+tools/rebase-jayofelony/artifacts/
+tools/rebase-jayofelony/artifacts-new/
+tools/rebase-jayofelony/work2/
+tools/rebase-jayofelony/mnt-boot/
+tools/rebase-jayofelony/mnt-root/
+tools/rebase-jayofelony/*.img
+tools/rebase-jayofelony/*.img.xz
+pi-gen/
+.git/

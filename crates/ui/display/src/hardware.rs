@@ -46,7 +46,7 @@
 //!   `crate::layout`. True 90/270 rotation support (swapping which axis is
 //!   the "long" one) is not implemented here.
 
-use crate::driver::{repack_for_panel, DisplayConfig, PanelKind};
+use crate::driver::{repack_for_panel, transpose_frame, DisplayConfig, DisplayRotation, PanelKind};
 use anyhow::{anyhow, Context, Result};
 use epd_waveshare::{epd2in13_v2::Epd2in13, epd2in9_v2::Epd2in9, prelude::*};
 use linux_embedded_hal::{
@@ -77,6 +77,7 @@ type OledDisplay = ssd1306::Ssd1306<
 pub(crate) struct HardwarePanel {
     kind: PanelKind,
     inner: PanelInner,
+    rotation: DisplayRotation,
 }
 
 enum PanelInner {
@@ -175,6 +176,7 @@ impl HardwarePanel {
         Ok(Self {
             kind,
             inner: PanelInner::Eink { spi, delay, panel },
+            rotation: config.rotation,
         })
     }
 
@@ -205,6 +207,7 @@ impl HardwarePanel {
             inner: PanelInner::Oled {
                 display: Box::new(display),
             },
+            rotation: config.rotation,
         })
     }
 
@@ -220,14 +223,31 @@ impl HardwarePanel {
         match &mut self.inner {
             PanelInner::Eink { spi, delay, panel } => {
                 let (panel_w, panel_h) = self.kind.dimensions();
-                if panel_w != width || panel_h != height {
-                    warn!(
-                        "framebuffer is {}x{} but panel {:?} is natively {}x{}; \
-                         proceeding, but check DisplayConfig::width/height / rotation",
-                        width, height, self.kind, panel_w, panel_h
-                    );
-                }
-                let packed = repack_for_panel(buffer, width, height);
+                let packed = if panel_w == width && panel_h == height {
+                    repack_for_panel(buffer, width, height)
+                } else if panel_w == height && panel_h == width {
+                    // The common case: this panel's native orientation
+                    // (e.g. Epd2in13 is natively 122x250, portrait) is
+                    // rotated 90 degrees from the logical/config
+                    // framebuffer (e.g. 250x122, landscape). Transpose
+                    // before packing rather than handing epd-waveshare a
+                    // wrong-sized buffer -- it asserts buffer.len() against
+                    // its own native buffer_len() and panics on mismatch
+                    // (confirmed on real hardware). See `transpose_frame`'s
+                    // docs for which direction `rotation` picks.
+                    let transposed = transpose_frame(buffer, width, height, self.rotation);
+                    repack_for_panel(&transposed, panel_w, panel_h)
+                } else {
+                    return Err(anyhow!(
+                        "framebuffer {}x{} is incompatible with panel {:?}'s native {}x{} \
+                         (neither equal nor a 90-degree swap) -- fix DisplayConfig::width/height",
+                        width,
+                        height,
+                        self.kind,
+                        panel_w,
+                        panel_h
+                    ));
+                };
                 macro_rules! push {
                     ($p:expr) => {{
                         if partial {

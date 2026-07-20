@@ -12,3 +12,10 @@ build-artifacts/
 tools/rebase-jayofelony/artifacts/
 tools/rebase-jayofelony/*.img
 tools/rebase-jayofelony/*.img.xz
+# Per-board build scratch dirs (each holds its own copy of the base image,
+# loop-mount points, artifacts, and produced image -- all generated).
+tools/rebase-jayofelony/work2/
+tools/rebase-jayofelony/work3/
+tools/rebase-jayofelony/mnt-boot/
+tools/rebase-jayofelony/mnt-root/
+tools/rebase-jayofelony/base.img

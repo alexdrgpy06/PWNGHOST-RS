@@ -1,0 +1,68 @@
+# Cross-compile pwnghost-rs for the rebase-jayofelony pipeline, targeting
+# an OLDER glibc baseline (Debian bullseye, glibc 2.31) than
+# Dockerfile.builder's own bookworm base (glibc ~2.36).
+#
+# Why a separate image instead of reusing Dockerfile.builder: real
+# hardware testing found the binary built there fails on v2.8.9
+# (bullseye) with "version `GLIBC_2.32' not found" -- glibc symbol
+# versioning is forward-compatible only (a binary linked against newer
+# glibc symbols can't run on an older glibc), never the reverse. Since
+# this rebase pipeline deliberately supports multiple base OS versions
+# (bullseye v2.8.9, bookworm v2.9.5.3), the binary needs to target the
+# OLDEST glibc among them -- which is then automatically fine on the
+# newer ones too. Dockerfile.builder itself stays on bookworm since
+# that's what its own from-scratch pi-gen build needs for the *build
+# host's* tooling, and changing it risks that already-working pipeline
+# for a problem that's specific to this one.
+FROM debian:bullseye-slim
+
+RUN dpkg --add-architecture armhf
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    gcc-arm-linux-gnueabihf \
+    g++-arm-linux-gnueabihf \
+    libc6-dev:armhf \
+    libstdc++-10-dev:armhf \
+    pkg-config \
+    libssl-dev:armhf \
+    libudev-dev:armhf \
+    libsqlite3-dev:armhf \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
+    && . "$HOME/.cargo/env" \
+    && rustup target add arm-unknown-linux-gnueabihf armv7-unknown-linux-gnueabihf
+
+ENV CARGO_HOME=/root/.cargo
+ENV PATH=/root/.cargo/bin:$PATH
+ENV PKG_CONFIG_ALLOW_CROSS=1
+ENV CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+ENV CC_arm_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
+ENV CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
+ENV CXX_arm_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
+ENV CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
+ENV PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
+
+WORKDIR /workspace
+COPY . /workspace
+
+# Same feature flags as Dockerfile.builder -- without hardware/linux-gpio,
+# display/GPIO fall back to no-op backends.
+RUN . "$HOME/.cargo/env" && \
+    cargo build --release --target arm-unknown-linux-gnueabihf --workspace \
+        --features pwnghost-rs/hardware --features pwnghost-rs/linux-gpio && \
+    cargo build --release --target armv7-unknown-linux-gnueabihf --workspace \
+        --features pwnghost-rs/hardware --features pwnghost-rs/linux-gpio
+
+RUN mkdir -p /workspace/artifacts/arm-unknown-linux-gnueabihf /workspace/artifacts/armv7-unknown-linux-gnueabihf && \
+    cp /workspace/target/arm-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/arm-unknown-linux-gnueabihf/ && \
+    cp /workspace/target/armv7-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/armv7-unknown-linux-gnueabihf/
+
+RUN arm-linux-gnueabihf-gcc -O2 -marm -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard \
+      -o /workspace/artifacts/arm-unknown-linux-gnueabihf/wlan_keepalive \
+      /workspace/crates/fw-patcher/vendor/wlan_keepalive.c && \
+    arm-linux-gnueabihf-gcc -O2 -marm -mcpu=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+      -o /workspace/artifacts/armv7-unknown-linux-gnueabihf/wlan_keepalive \
+      /workspace/crates/fw-patcher/vendor/wlan_keepalive.c

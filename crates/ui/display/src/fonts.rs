@@ -70,6 +70,31 @@ pub fn is_combining_mark(ch: char) -> bool {
     kaomoji_font_data::COMBINING_MARKS.contains(&ch)
 }
 
+/// The cursor advance width (unscaled, in pixels) for a rasterized glyph
+/// cell. GNU Unifont is a *dual-width* bitmap font: Latin/ASCII/punctuation
+/// codepoints (e.g. `(`, `_`, `)`, space) only ever paint the left half of
+/// their `GLYPH_CELL_W`-wide cell, while wide symbol/CJK codepoints (many
+/// of the mood-face glyphs, e.g. U+2686) use the full cell. Advancing every
+/// glyph by the full cell width regardless -- what this atlas's consumers
+/// used to do -- doubles the on-screen width of every narrow character,
+/// which is why kaomoji faces rendered as isolated characters scattered
+/// across nearly the full panel width instead of a compact face (confirmed
+/// against a real device photo). Detected here by checking whether any ink
+/// falls in the right half of the cell; narrow glyphs never do.
+pub fn glyph_advance_width(bits: &[u8; GLYPH_BYTES]) -> u32 {
+    let row_bytes = (GLYPH_CELL_W as usize).div_ceil(8);
+    if row_bytes < 2 {
+        return GLYPH_CELL_W;
+    }
+    let is_wide = (0..GLYPH_CELL_H as usize)
+        .any(|row| bits[row * row_bytes + 1..(row + 1) * row_bytes].iter().any(|&b| b != 0));
+    if is_wide {
+        GLYPH_CELL_W
+    } else {
+        GLYPH_CELL_W / 2
+    }
+}
+
 /// Font registry mapping names to built-in monospace fonts.
 pub struct FontRegistry {
     fonts: HashMap<String, &'static MonoFont<'static>>,

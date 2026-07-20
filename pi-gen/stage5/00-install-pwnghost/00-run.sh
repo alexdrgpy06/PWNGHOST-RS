@@ -136,6 +136,13 @@ Description=PWNGHOST-RS - Rust Pwnagotchi Implementation
 Documentation=https://github.com/pwnghost-rs/pwnghost-rs
 After=network.target
 Wants=network.target
+# StartLimitIntervalSec=/StartLimitBurst= belong in [Unit], not [Service]
+# -- confirmed by a real systemd warning on hardware ("Unknown key name
+# 'StartLimitIntervalSec' in section 'Service', ignoring") on the
+# bullseye-era systemd the tools/rebase-jayofelony pipeline targets;
+# [Unit] is the universally correct location across systemd versions.
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=notify
@@ -143,50 +150,41 @@ NotifyAccess=main
 ExecStart=/usr/local/bin/pwnghost-rs --config /etc/pwnghost/config.toml
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=3
 
-# Security hardening
+# Deliberately NOT sandboxed with ProtectSystem=strict/PrivateTmp=yes/
+# ReadWritePaths= (an earlier revision had all three). None of the
+# reference implementation's own services (bettercap.service,
+# pwnagotchi.service, pwngrid-peer.service -- confirmed by reading them
+# directly from a real jayofelony image) use ANY systemd sandboxing at
+# all; they're plain Type=simple + Restart=always. Our own hardening was
+# never adapted from anything proven, and it caused two separate real
+# failures on actual hardware (via the tools/rebase-jayofelony pipeline,
+# which uses this same unit content, so the bug was universal to every
+# image built this session, not specific to the rebase):
+# ProtectSystem=strict requires every ReadWritePaths= entry to already
+# exist as a bind-mountable path, and broke first on /run/pwnghost
+# (tmpfs, wiped every boot -- fixed with RuntimeDirectory=), then, once
+# PrivateTmp=yes was also removed for conflicting with it, broke again
+# on /var/tmp/pwnghost via the exact same mechanism. Rather than keep
+# chasing more paths ProtectSystem=strict might object to, matching what
+# real users' images actually run in production is the safer bet.
+# RuntimeDirectory= and NoNewPrivileges= are kept -- neither caused any
+# issue, and both are still real value without ProtectSystem set.
 NoNewPrivileges=yes
-# PrivateTmp=yes is deliberately NOT set here: it gives the unit a fresh,
-# empty, PRIVATE /tmp *and* /var/tmp on every single start (systemd
-# mounts a new tmpfs over both), which is incompatible with
-# ReadWritePaths=/var/tmp/pwnghost below -- that path is meant to be the
-# real, shared /var/tmp/pwnghost (our own tmpfs capture-staging mount
-# from pi-gen/stage5's zram/tmpfs setup, expected to persist across
-# service restarts within a boot), not a throwaway per-restart sandbox.
-# Confirmed on real hardware: with PrivateTmp=yes, RuntimeDirectory=
-# fixed /run/pwnghost, but the exact same failure then moved to
-# /var/tmp/pwnghost ("Failed to set up mount namespacing:
-# .../var/tmp/pwnghost: No such file or directory", status=226/NAMESPACE)
-# -- because PrivateTmp's fresh private /var/tmp never has that
-# subdirectory, no matter what build time or ReadWritePaths says.
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/etc/pwnghost /var/log/pwnghost /var/tmp/pwnghost /var/lib/pwnghost
-# RuntimeDirectory (not a bare /run/pwnghost in ReadWritePaths=) is
-# required: /run is tmpfs, wiped fresh on every boot, so nothing at
-# build time can pre-create /run/pwnghost for it to persist. With
-# ProtectSystem=strict, listing a ReadWritePaths= entry that doesn't
-# exist makes systemd's mount-namespace setup fail outright before the
-# process even starts -- confirmed on real hardware (via the
-# tools/rebase-jayofelony pipeline, which uses this same unit content):
-# "Failed to set up mount namespacing: .../run/pwnghost: No such file or
-# directory", "Failed at step NAMESPACE", status=226/NAMESPACE, looping
-# through the restart limit and never actually starting. This unit is
-# the source of truth for pwnghost-rs.service copied into that pipeline
-# too, so the bug was universal to every image built this session, not
-# specific to the rebase. RuntimeDirectory= is systemd's own mechanism
-# for exactly this: it creates (and removes) /run/pwnghost around each
-# start/stop of this unit.
 RuntimeDirectory=pwnghost
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_SYS_RESOURCE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
-# Resource limits
+# Resource limits. MemoryMax raised from an earlier, untested 50M --
+# real memory usage under actual AngryOxide + web UI + RL operation has
+# never been measured on hardware yet (every real-hardware run so far
+# never got past the sandboxing failures above), and 50M was a guess,
+# not a measurement. Better to give real headroom now and tighten later
+# once actual usage is known, than risk a silent, hard-to-diagnose
+# OOM-kill on top of everything else this session already found.
 LimitNOFILE=65536
 LimitNPROC=4096
-MemoryMax=50M
+MemoryMax=200M
 CPUQuota=80%
 
 # Logging
@@ -245,7 +243,12 @@ Wants=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/wlan_keepalive wlan0mon 100
+# "wlan0", not "wlan0mon": AngryOxide manages monitor mode itself via
+# netlink and never renames the interface (see pwnghost-rs's main.rs) --
+# confirmed on real hardware that the old "wlan0mon" arg meant this daemon
+# was watching an interface that never existed, and it sat idle for its
+# entire run ("wlan_keepalive: stopped (0 total frames)" in its own log).
+ExecStart=/usr/local/bin/wlan_keepalive wlan0 100
 Restart=always
 RestartSec=3
 Nice=10

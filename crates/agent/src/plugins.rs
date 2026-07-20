@@ -173,6 +173,44 @@ impl PluginManager {
         Ok(())
     }
 
+    /// Invoke the `on_ready` hook of every loaded plugin, once, after the
+    /// agent/display/web/AngryOxide are all up. Matches real pwnagotchi's
+    /// `on_starting`/plugin `on_ready` convention -- plugins that need
+    /// one-time setup (e.g. `grid` announcing this unit, `webcfg` priming
+    /// its own state) previously had no hook fired at startup at all,
+    /// only per-epoch.
+    pub async fn on_ready(&self) -> Result<()> {
+        for (name, plugin) in &self.plugins {
+            if let Err(e) = plugin.execute("on_ready") {
+                warn!("Plugin {} on_ready error: {}", name, e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Invoke the `on_handshake` hook of every loaded plugin with the
+    /// real captured BSSID/SSID/file path as Lua globals -- previously
+    /// plugins had no way to react to an actual handshake capture at
+    /// all (`wpa_sec`/`wigle`/`grid`/`pwncrack` all need this to upload
+    /// or log the real file, not just observe the epoch counter go up).
+    pub async fn on_handshake(&self, bssid: &str, ssid: &str, path: &str) -> Result<()> {
+        for (name, plugin) in &self.plugins {
+            let globals = plugin.lua.globals();
+            if let Err(e) = globals
+                .set("handshake_bssid", bssid)
+                .and_then(|_| globals.set("handshake_ssid", ssid))
+                .and_then(|_| globals.set("handshake_path", path))
+            {
+                warn!("Plugin {} on_handshake context error: {}", name, e);
+                continue;
+            }
+            if let Err(e) = plugin.execute("on_handshake") {
+                warn!("Plugin {} on_handshake error: {}", name, e);
+            }
+        }
+        Ok(())
+    }
+
     pub fn list_plugins(&self) -> Vec<String> {
         self.plugins.keys().cloned().collect()
     }

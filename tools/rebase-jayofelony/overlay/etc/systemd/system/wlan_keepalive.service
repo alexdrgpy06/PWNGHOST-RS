@@ -6,7 +6,12 @@ Wants=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/wlan_keepalive wlan0mon 100
+# "wlan0", not "wlan0mon": AngryOxide manages monitor mode itself via
+# netlink and never renames the interface (see pwnghost-rs's main.rs) --
+# confirmed on real hardware that the old "wlan0mon" arg meant this daemon
+# was watching an interface that never existed, and it sat idle for its
+# entire run ("wlan_keepalive: stopped (0 total frames)" in its own log).
+ExecStart=/usr/local/bin/wlan_keepalive wlan0 100
 Restart=always
 RestartSec=3
 Nice=10

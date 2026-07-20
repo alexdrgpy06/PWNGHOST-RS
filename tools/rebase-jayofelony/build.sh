@@ -57,17 +57,48 @@ done
 mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
 update-binfmt --remove qemu-arm 2>/dev/null || true
 update-binfmt --enable qemu-arm 2>/dev/null || true
-if [ ! -e /proc/sys/fs/binfmt_misc/qemu-arm ]; then
-    echo "build.sh: qemu-arm binfmt registration failed -- chroot commands will not run" >&2
+
+# `update-binfmt` isn't guaranteed to exist (confirmed on real hardware:
+# missing entirely in one run despite having worked in a prior run of
+# the exact same image -- Docker Desktop's own WSL2 VM can already have
+# ARM emulation registered under a *different* name, e.g. `arm` instead
+# of `qemu-arm`, via its own bundled binfmt provisioning, which survives
+# VM restarts independently of anything this script does). Accept
+# whichever handler is actually present rather than hardcoding one name.
+BINFMT_HANDLER=""
+for candidate in qemu-arm arm; do
+    if [ -e "/proc/sys/fs/binfmt_misc/$candidate" ]; then
+        BINFMT_HANDLER="$candidate"
+        break
+    fi
+done
+if [ -z "$BINFMT_HANDLER" ]; then
+    echo "build.sh: no ARM binfmt_misc handler registered (checked qemu-arm, arm) -- chroot commands will not run" >&2
     exit 1
+fi
+echo "build.sh: using binfmt handler '$BINFMT_HANDLER'"
+
+# The registered handler's own `interpreter` path is whatever *that*
+# registration says (Docker Desktop's own `arm` handler points at
+# `/usr/bin/qemu-arm`, not `/usr/bin/qemu-arm-static` -- a different
+# filename than the one this image's Dockerfile installs). Whatever it
+# is, that exact path has to exist inside the chroot too, since the
+# kernel resolves it relative to the executing process's own root, not
+# this container's. Read it dynamically instead of assuming a name.
+BINFMT_INTERPRETER="$(awk '/^interpreter /{print $2}' "/proc/sys/fs/binfmt_misc/$BINFMT_HANDLER")"
+if [ -z "$BINFMT_INTERPRETER" ]; then
+    BINFMT_INTERPRETER="/usr/bin/qemu-arm-static"
 fi
 
 BOARD="${BOARD:?Set BOARD=pi-zero-w or BOARD=pi-zero-2w}"
 case "$BOARD" in
-    pi-zero-w)  RUST_TARGET="arm-unknown-linux-gnueabihf" ;;
-    pi-zero-2w) RUST_TARGET="armv7-unknown-linux-gnueabihf" ;;
+    pi-zero-w)  RUST_TARGET="arm-unknown-linux-gnueabihf"; ANGRYOXIDE_ARCH="linux-arm-musl" ;;
+    pi-zero-2w) RUST_TARGET="armv7-unknown-linux-gnueabihf"; ANGRYOXIDE_ARCH="linux-armv7hf-musl" ;;
     *) echo "build.sh: unknown BOARD='$BOARD' (expected pi-zero-w or pi-zero-2w)" >&2; exit 1 ;;
 esac
+# Same pin as pi-gen/config's ANGRYOXIDE_VERSION -- keep the two build
+# pipelines on the same AngryOxide release.
+ANGRYOXIDE_VERSION="${ANGRYOXIDE_VERSION:-v0.9.2}"
 
 WORK_DIR="${WORK_DIR:-/work}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$WORK_DIR/artifacts}"
@@ -191,6 +222,15 @@ mount "$ROOT_LOOP" "$ROOT_MNT"
 # --- 4. Set up chroot (qemu-arm-static for armhf binaries) ----------------
 log "Setting up chroot"
 cp /usr/bin/qemu-arm-static "$ROOT_MNT/usr/bin/qemu-arm-static"
+# Also place it at whatever path the active binfmt registration's own
+# `interpreter` field points to, if that's a different filename (see the
+# binfmt handler detection above) -- the kernel resolves that path
+# relative to the chroot's own root, so it has to exist there under
+# that exact name too, not just as `qemu-arm-static`.
+if [ "$BINFMT_INTERPRETER" != "/usr/bin/qemu-arm-static" ]; then
+    mkdir -p "$ROOT_MNT$(dirname "$BINFMT_INTERPRETER")"
+    cp /usr/bin/qemu-arm-static "$ROOT_MNT$BINFMT_INTERPRETER"
+fi
 mount --bind /proc "$ROOT_MNT/proc"
 mount --bind /sys "$ROOT_MNT/sys"
 mount --bind /dev "$ROOT_MNT/dev"
@@ -231,6 +271,65 @@ rm -rf /var/lib/apt/lists/*
 log "Installing pwnghost-rs ($RUST_TARGET) + overlay"
 install -m 755 "$ARTIFACTS_DIR/$RUST_TARGET/pwnghost-rs" "$ROOT_MNT/usr/local/bin/pwnghost-rs"
 install -m 755 "$ARTIFACTS_DIR/$RUST_TARGET/wlan_keepalive" "$ROOT_MNT/usr/local/bin/wlan_keepalive"
+
+# AngryOxide was never installed by this rebase pipeline -- pwnghost-rs
+# shells out to /usr/local/bin/angryoxide at startup and hard-fails if
+# it's missing (confirmed on real hardware: service starts, logs
+# "Initializing AngryOxide subprocess...", then "Error: AngryOxide binary
+# not found: /usr/local/bin/angryoxide", exit 1). The from-scratch
+# pi-gen build already installs this the same way in
+# pi-gen/stage4/00-install-artifacts/00-run.sh -- same version pin,
+# same prebuilt static-musl tarball, same install path -- just never
+# ported over here since this pipeline was written independently.
+log "Installing AngryOxide ($ANGRYOXIDE_VERSION, $ANGRYOXIDE_ARCH) + hcxtools"
+chroot "$ROOT_MNT" /bin/bash -euo pipefail -c "
+export DEBIAN_FRONTEND=noninteractive
+# Raspberry Pi's own mirror (raspbian.raspberrypi.org, the source for the
+# 'rpi' component hcxtools lives in) has been observed refusing
+# connections or failing to serve its component index intermittently --
+# confirmed transient (a plain connectivity test to the same host
+# succeeds moments later) but real enough to have failed 3 build attempts
+# in a row. Retry the whole update+install a few times with backoff
+# rather than letting one flaky window fail the entire multi-minute image
+# build.
+for attempt in 1 2 3 4 5; do
+    if apt-get update && apt-get install -y --no-install-recommends curl ca-certificates hcxtools; then
+        break
+    fi
+    if [ \"\$attempt\" = 5 ]; then
+        echo 'build.sh: apt-get update/install failed 5 times, giving up' >&2
+        exit 1
+    fi
+    echo \"build.sh: apt-get update/install failed (attempt \$attempt/5), retrying in \$((attempt * 10))s\" >&2
+    sleep \$((attempt * 10))
+done
+AO_URL='https://github.com/Ragnt/AngryOxide/releases/download/${ANGRYOXIDE_VERSION}/angryoxide-${ANGRYOXIDE_ARCH}.tar.gz'
+AO_TMP=\"\$(mktemp -d)\"
+curl -fsSL \"\$AO_URL\" -o \"\$AO_TMP/angryoxide.tar.gz\"
+tar -xzf \"\$AO_TMP/angryoxide.tar.gz\" -C \"\$AO_TMP\"
+AO_BIN=\"\$(find \"\$AO_TMP\" -maxdepth 2 -type f -name angryoxide | head -1)\"
+if [ -z \"\$AO_BIN\" ]; then
+    echo 'build.sh: ERROR angryoxide binary not found inside release tarball' >&2
+    exit 1
+fi
+install -m 755 \"\$AO_BIN\" /usr/local/bin/angryoxide
+rm -rf \"\$AO_TMP\"
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+"
+
+# This base image's config.txt enables dtoverlay=spi1-3cs (SPI1 with 3
+# chip-selects: CE0=GPIO18, CE1=GPIO17, CE2=GPIO16) for every board
+# variant ([pi0]/[pi3]/[pi4] sections). We don't use SPI1 for anything,
+# but CE1=GPIO17 is the exact same pin the Waveshare e-Paper HAT uses for
+# its RST line (BUSY=24, DC=25, RST=17 -- Waveshare's standard pinout).
+# Confirmed on real hardware via strace: pwnghost-rs's GPIO_GET_LINEHANDLE_IOCTL
+# for pin 17 fails with EBUSY (already claimed by the spi1-3cs overlay at
+# boot), which is why the display previously failed to initialize.
+# Disabling this overlay (verified live over SSH to fix it) frees GPIO17
+# back to plain GPIO use.
+log "Disabling dtoverlay=spi1-3cs (conflicts with e-ink RST on GPIO17)"
+sed -i 's/^dtoverlay=spi1-3cs/#dtoverlay=spi1-3cs/' "$BOOT_MNT/config.txt"
 
 # overlay/ (see this directory) carries our own config.toml,
 # pwnghost-rs.service, wlan_keepalive.service, monstart/monstop, and the
@@ -353,7 +452,12 @@ log "Compressing"
 # xz's own default output path (${OUT_IMG}.xz) is already exactly $OUT_XZ
 # -- no rename needed (an earlier revision tried to `mv` it onto itself,
 # which fails with "are the same file").
-xz -T0 -9 -v -f "$OUT_IMG"
+# --memlimit-compress: xz -T0's auto-thread mode otherwise self-limits to
+# ~25% of detected RAM by default (confirmed live: it silently dropped
+# from 6 threads to 1 on a host with plenty of free memory, turning a
+# multi-core box into a single-threaded compression run). 80% is
+# generous headroom while still leaving room for the rest of the system.
+xz -T0 -9 -v -f --memlimit-compress=80% "$OUT_IMG"
 
 log "Done: $OUT_XZ"
 ls -lh "$OUT_XZ"

@@ -1,52 +1,450 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PWNGHOST-RS</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body {
-      font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-      margin: 0; padding: 2rem; background: #0b0f0c; color: #b7f7c2;
-    }
-    h1 { font-size: 1.4rem; letter-spacing: 0.1em; }
-    .face { font-size: 2.5rem; margin: 1rem 0; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; max-width: 720px; }
-    .card { border: 1px solid #1f3a29; border-radius: 8px; padding: 0.75rem 1rem; background: #0f1712; }
-    .k { opacity: 0.6; font-size: 0.75rem; text-transform: uppercase; }
-    .v { font-size: 1.25rem; }
-    footer { margin-top: 2rem; opacity: 0.5; font-size: 0.75rem; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PWNGHOST-RS</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --accent: #4caf50;
+    --bg: #0b0f0c;
+    --panel: #0f1712;
+    --border: #1f3a29;
+    --text: #b7f7c2;
+    --dim: #7fa889;
+    --danger: #e05a5a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    margin: 0; padding: 1rem; background: var(--bg); color: var(--text);
+    line-height: 1.4;
+  }
+  h1 { font-size: 1.3rem; letter-spacing: 0.08em; margin: 0; }
+  h2 { font-size: 0.95rem; letter-spacing: 0.06em; margin: 0 0 0.5rem; opacity: 0.85; text-transform: uppercase; }
+  a { color: var(--accent); }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;
+  }
+  .conn { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; opacity: 0.8; }
+  .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--danger); flex: none; }
+  .dot.ok { background: var(--accent); }
+  .dot.pending { background: #d8a13a; }
+
+  .top {
+    display: flex; gap: 1.25rem; align-items: center; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem 1.25rem; margin-bottom: 1rem;
+  }
+  .face { font-size: 2.75rem; line-height: 1; }
+  .moodblock .mood { font-size: 1.1rem; font-weight: bold; }
+  .moodblock .name { opacity: 0.6; font-size: 0.75rem; }
+
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.6rem; margin-bottom: 1.25rem;
+  }
+  .card {
+    border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.85rem; background: var(--panel);
+  }
+  .k { opacity: 0.6; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .v { font-size: 1.15rem; }
+
+  section {
+    border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+    padding: 0.85rem 1rem; margin-bottom: 1rem;
+  }
+  .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+  button {
+    font-family: inherit; background: transparent; color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.25rem 0.6rem;
+    font-size: 0.7rem; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { opacity: 0.6; font-weight: normal; text-transform: uppercase; font-size: 0.65rem; }
+  .scroll-x { overflow-x: auto; }
+  .empty { opacity: 0.5; font-size: 0.8rem; padding: 0.5rem 0; }
+  tr.fresh td { color: var(--accent); }
+
+  .cfg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; }
+  .cfg-group .k { display: block; margin-top: 0.35rem; }
+  .cfg-group .k:first-child { margin-top: 0; }
+  .cfg-group .v { font-size: 0.85rem; word-break: break-all; }
+  details { margin-top: 0.75rem; }
+  summary { cursor: pointer; font-size: 0.75rem; opacity: 0.7; }
+  pre {
+    background: #060907; border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.6rem; font-size: 0.7rem; overflow-x: auto; max-height: 320px;
+  }
+  footer { opacity: 0.4; font-size: 0.7rem; margin-top: 1rem; text-align: center; }
+
+  .activity-log {
+    max-height: 220px; overflow-y: auto; font-size: 0.75rem;
+    background: #060907; border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.6rem;
+  }
+  .activity-line { display: flex; gap: 0.5rem; padding: 0.1rem 0; white-space: nowrap; }
+  .activity-line .lvl { flex: none; width: 4.5rem; opacity: 0.7; text-transform: uppercase; font-size: 0.65rem; }
+  .activity-line .msg { opacity: 0.9; }
+  .activity-line.err .lvl, .activity-line.err .msg { color: var(--danger); }
+  .activity-line.warn .lvl, .activity-line.warn .msg { color: #d8a13a; }
+  .activity-line.priority .lvl { color: var(--accent); }
+
+  @media (min-width: 720px) {
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
+  }
+</style>
 </head>
 <body>
-  <h1>PWNGHOST-RS</h1>
-  <div class="face" id="face">(◕‿‿◕)</div>
+  <header>
+    <h1 id="agent-name">PWNGHOST-RS</h1>
+    <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></div>
+  </header>
+
+  <div class="top">
+    <div class="face" id="face">—</div>
+    <div class="moodblock">
+      <div class="mood" id="mood">—</div>
+      <div class="name">mood</div>
+    </div>
+  </div>
+
   <div class="grid">
-    <div class="card"><div class="k">Mood</div><div class="v" id="mood">—</div></div>
     <div class="card"><div class="k">Channel</div><div class="v" id="channel">—</div></div>
     <div class="card"><div class="k">APs</div><div class="v" id="aps">—</div></div>
     <div class="card"><div class="k">Handshakes</div><div class="v" id="handshakes">—</div></div>
     <div class="card"><div class="k">Level</div><div class="v" id="level">—</div></div>
-    <div class="card"><div class="k">Peers</div><div class="v" id="peers">—</div></div>
+    <div class="card"><div class="k">XP</div><div class="v" id="xp">—</div></div>
+    <div class="card"><div class="k">Peers</div><div class="v" id="peers-count">—</div></div>
     <div class="card"><div class="k">Uptime</div><div class="v" id="uptime">—</div></div>
     <div class="card"><div class="k">Epoch</div><div class="v" id="epoch">—</div></div>
+    <div class="card"><div class="k">CPU Temp</div><div class="v" id="cpu-temp">—</div></div>
+    <div class="card"><div class="k">RAM</div><div class="v" id="ram">—</div></div>
+    <div class="card"><div class="k">Battery</div><div class="v" id="battery">—</div></div>
   </div>
-  <footer>Live status refreshes every few seconds.</footer>
-  <script>
-    async function refresh() {
-      try {
-        const r = await fetch('/api/status');
-        if (!r.ok) return;
-        const s = await r.json();
-        const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-        set('face', s.face); set('mood', s.mood); set('channel', s.channel);
-        set('aps', s.aps); set('handshakes', s.handshakes); set('level', s.level);
-        set('peers', s.peers); set('uptime', s.uptime + 's'); set('epoch', s.epoch);
-      } catch (e) { /* server not ready */ }
+
+  <section>
+    <div class="section-head">
+      <h2>Live activity (AngryOxide)</h2>
+      <span class="k" id="activity-hint">waiting for AngryOxide…</span>
+    </div>
+    <div class="scroll-x">
+      <div id="activity-log" class="activity-log"></div>
+    </div>
+    <div class="empty" id="activity-empty">No activity yet — waiting for AngryOxide to report in.</div>
+  </section>
+
+  <div class="cols">
+    <section>
+      <div class="section-head"><h2>Peers</h2><button id="peers-refresh">refresh</button></div>
+      <div class="scroll-x">
+        <table>
+          <thead><tr><th>Name</th><th>MAC</th><th>Ch</th><th>Mood</th><th>Lvl</th><th>Signal</th><th>HS shared</th><th>Last seen</th></tr></thead>
+          <tbody id="peers-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="peers-empty">No peers seen yet.</div>
+    </section>
+
+    <section>
+      <div class="section-head"><h2>Handshakes</h2><button id="hs-refresh">refresh</button></div>
+      <div class="scroll-x">
+        <table>
+          <thead><tr><th>Time</th><th>SSID</th><th>BSSID</th><th>Ch</th><th>Type</th></tr></thead>
+          <tbody id="hs-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="hs-empty">No handshakes captured yet.</div>
+    </section>
+  </div>
+
+  <section>
+    <div class="section-head"><h2>Config</h2><button id="cfg-refresh">refresh</button></div>
+    <div class="cfg-grid">
+      <div class="cfg-group">
+        <span class="k">Name</span><span class="v" id="cfg-name">—</span>
+        <span class="k">Interface</span><span class="v" id="cfg-iface">—</span>
+        <span class="k">Language</span><span class="v" id="cfg-lang">—</span>
+        <span class="k">Whitelist</span><span class="v" id="cfg-whitelist">—</span>
+      </div>
+      <div class="cfg-group">
+        <span class="k">Web UI</span><span class="v" id="cfg-web">—</span>
+        <span class="k">Display</span><span class="v" id="cfg-display">—</span>
+      </div>
+      <div class="cfg-group">
+        <span class="k">Deauth / Associate</span><span class="v" id="cfg-attack">—</span>
+        <span class="k">Recon time (min/max/hop)</span><span class="v" id="cfg-recon">—</span>
+        <span class="k">Rewards (handshake/new-ap/assoc)</span><span class="v" id="cfg-rewards">—</span>
+        <span class="k">Mood thresholds (bored/sad/angry/lonely)</span><span class="v" id="cfg-thresholds">—</span>
+      </div>
+    </div>
+    <details>
+      <summary>raw config JSON</summary>
+      <pre id="cfg-raw">—</pre>
+    </details>
+  </section>
+
+  <footer>PWNGHOST-RS — live via WebSocket, falls back to polling if disconnected.</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const set = (id, v) => { const e = $(id); if (e) e.textContent = (v === null || v === undefined || v === '') ? '—' : v; };
+
+function fmtDuration(secs) {
+  if (secs === null || secs === undefined) return '—';
+  secs = Math.floor(secs);
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function fmtAgo(unixSecs) {
+  if (unixSecs === null || unixSecs === undefined) return '—';
+  const diff = Math.floor(Date.now() / 1000 - unixSecs);
+  if (diff < 5) return 'just now';
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return new Date(unixSecs * 1000).toLocaleString();
+}
+
+function applySession(d) {
+  set('mood', d.mood);
+  set('face', d.face);
+  set('channel', d.channel);
+  set('aps', d.aps);
+  set('handshakes', d.handshakes);
+  set('level', d.level);
+  set('xp', d.xp);
+  set('peers-count', d.peers);
+  set('uptime', fmtDuration(d.uptime));
+  set('epoch', d.epoch);
+  if (typeof d.peers === 'number' && d.peers !== lastPeerCount) {
+    lastPeerCount = d.peers;
+    loadPeers();
+  }
+}
+
+function applyStatusExtras(d) {
+  set('cpu-temp', d.cpu_temp !== null && d.cpu_temp !== undefined ? `${d.cpu_temp.toFixed(1)}°C` : '—');
+  set('ram', (d.ram_total || 0) > 0 ? `${d.ram_used}MB / ${d.ram_total}MB` : '—');
+  set('battery', d.battery !== null && d.battery !== undefined ? `${d.battery}%${d.charging ? ' ⚡' : ''}` : '—');
+}
+
+let lastPeerCount = null;
+
+function renderPeers(list) {
+  const body = $('peers-body');
+  const empty = $('peers-empty');
+  body.innerHTML = '';
+  if (!list || list.length === 0) {
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  list.slice().sort((a, b) => b.signal - a.signal).forEach((p) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${p.name || '—'}</td><td>${p.mac}</td><td>${p.channel}</td><td>${p.mood}</td><td>${p.level}</td><td>${p.signal} dBm</td><td>${p.handshakes_shared}</td><td>${fmtAgo(p.last_seen)}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+function renderHandshakes(list) {
+  const body = $('hs-body');
+  const empty = $('hs-empty');
+  body.innerHTML = '';
+  if (!list || list.length === 0) {
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  list.slice().sort((a, b) => b.captured_at - a.captured_at).forEach((h) => addHandshakeRow(h, false));
+}
+
+const ACTIVITY_MAX_LINES = 200;
+
+function addActivityLine(level, message) {
+  const log = $('activity-log');
+  $('activity-empty').style.display = 'none';
+  $('activity-hint').textContent = 'live';
+  const line = document.createElement('div');
+  const cls = (level || '').toLowerCase();
+  line.className = 'activity-line' + (cls === 'error' ? ' err' : cls === 'warning' ? ' warn' : cls === 'priority' ? ' priority' : '');
+  const time = new Date().toLocaleTimeString();
+  line.innerHTML = `<span class="lvl">${time}</span><span class="msg">${escapeHtml(message)}</span>`;
+  log.appendChild(line);
+  while (log.children.length > ACTIVITY_MAX_LINES) {
+    log.removeChild(log.firstChild);
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function addHandshakeRow(h, fresh) {
+  const body = $('hs-body');
+  $('hs-empty').style.display = 'none';
+  const tr = document.createElement('tr');
+  if (fresh) tr.className = 'fresh';
+  const time = h.captured_at ? fmtAgo(h.captured_at) : 'just now';
+  tr.innerHTML = `<td>${time}</td><td>${h.ssid || '(hidden)'}</td><td>${h.bssid}</td><td>${h.channel}</td><td>${h.handshake_type}</td>`;
+  body.insertBefore(tr, body.firstChild);
+}
+
+function renderConfig(c) {
+  const main = c.main || {};
+  const p = c.personality || {};
+  const ui = c.ui || {};
+  const web = ui.web || {};
+  const display = ui.display || {};
+
+  set('agent-name', main.name ? `PWNGHOST-RS — ${main.name}` : 'PWNGHOST-RS');
+  set('cfg-name', main.name);
+  set('cfg-iface', main.iface);
+  set('cfg-lang', main.lang);
+  set('cfg-whitelist', (main.whitelist && main.whitelist.length) ? main.whitelist.join(', ') : 'none');
+  set('cfg-web', `${web.enabled ? 'on' : 'off'} @ ${web.address}:${web.port}${web.auth ? ' (auth)' : ''}`);
+  set('cfg-display', `${display.enabled ? 'on' : 'off'} — ${display.display_type}, rot ${display.rotation}°`);
+  set('cfg-attack', `${p.deauth ? 'on' : 'off'} / ${p.associate ? 'on' : 'off'}`);
+  set('cfg-recon', `${p.min_recon_time}s / ${p.max_recon_time}s / ${p.hop_recon_time}s`);
+  set('cfg-rewards', `${p.reward_handshake} / ${p.reward_new_ap} / ${p.reward_association}`);
+  set('cfg-thresholds', `${p.bored_num_epochs} / ${p.sad_num_epochs} / ${p.angry_num_epochs} / ${p.lonely_num_epochs}`);
+
+  if (web.theme) {
+    const t = web.theme;
+    document.documentElement.style.setProperty('--accent', `rgb(${t.accent_r}, ${t.accent_g}, ${t.accent_b})`);
+  }
+
+  $('cfg-raw').textContent = JSON.stringify(c, null, 2);
+}
+
+async function loadStatus() {
+  try {
+    const r = await fetch('/api/status');
+    if (!r.ok) return;
+    const s = await r.json();
+    applySession(s);
+    applyStatusExtras(s);
+  } catch (e) {}
+}
+
+async function loadPeers() {
+  try {
+    const r = await fetch('/api/peers');
+    if (!r.ok) return;
+    renderPeers(await r.json());
+  } catch (e) {}
+}
+
+async function loadHandshakes() {
+  try {
+    const r = await fetch('/api/handshakes');
+    if (!r.ok) return;
+    renderHandshakes(await r.json());
+  } catch (e) {}
+}
+
+async function loadConfig() {
+  try {
+    const r = await fetch('/api/config');
+    if (!r.ok) return;
+    renderConfig(await r.json());
+  } catch (e) {}
+}
+
+$('peers-refresh').addEventListener('click', loadPeers);
+$('hs-refresh').addEventListener('click', loadHandshakes);
+$('cfg-refresh').addEventListener('click', loadConfig);
+
+let ws = null;
+let reconnectDelay = 1000;
+let fallbackTimer = null;
+
+function setConn(state) {
+  const dot = $('conn-dot');
+  const text = $('conn-text');
+  dot.className = 'dot ' + (state === 'ok' ? 'ok' : state === 'pending' ? 'pending' : '');
+  text.textContent = state === 'ok' ? 'live' : state === 'pending' ? 'connecting…' : 'offline (polling)';
+}
+
+function startFallbackPolling() {
+  if (fallbackTimer) return;
+  fallbackTimer = setInterval(loadStatus, 3000);
+}
+
+function stopFallbackPolling() {
+  if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = null; }
+}
+
+function connectWs() {
+  setConn('pending');
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+  ws.onopen = () => {
+    setConn('ok');
+    stopFallbackPolling();
+    reconnectDelay = 1000;
+  };
+
+  ws.onmessage = (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch (e) { return; }
+    switch (msg.type) {
+      case 'Session':
+        applySession(msg);
+        break;
+      case 'MoodChange':
+        set('mood', msg.mood);
+        set('face', msg.face);
+        break;
+      case 'Handshake':
+        addHandshakeRow({ bssid: msg.bssid, ssid: msg.ssid, channel: msg.channel, handshake_type: msg.handshake_type, captured_at: null }, true);
+        break;
+      case 'Peer':
+        loadPeers();
+        break;
+      case 'PeerLost':
+        loadPeers();
+        break;
+      case 'ChannelChange':
+        set('channel', msg.channel);
+        break;
+      case 'Status':
+        applyStatusExtras(msg);
+        break;
+      case 'AoActivity':
+        addActivityLine(msg.level, msg.message);
+        break;
     }
-    refresh();
-    setInterval(refresh, 3000);
-  </script>
+  };
+
+  ws.onclose = () => {
+    setConn('offline');
+    startFallbackPolling();
+    setTimeout(connectWs, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+  };
+
+  ws.onerror = () => { ws.close(); };
+}
+
+loadStatus();
+loadPeers();
+loadHandshakes();
+loadConfig();
+connectWs();
+</script>
 </body>
 </html>

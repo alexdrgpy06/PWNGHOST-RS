@@ -224,6 +224,64 @@ pub(crate) fn packed_frame_bytes(width: u32, height: u32) -> usize {
     ((width as u64 * height as u64).div_ceil(8)) as usize
 }
 
+/// Rotates a logical `width` x `height` framebuffer (this crate's internal
+/// flat, unpadded, LSB-first-per-byte convention) by 90 degrees, producing
+/// a new flat buffer sized `height` x `width`.
+///
+/// This exists for panels whose native orientation is rotated 90 degrees
+/// relative to the logical (config `width`/`height`) framebuffer -- e.g. a
+/// portrait-native e-ink panel (like the Waveshare 2.13", natively
+/// 122x250) driving a landscape UI (`DisplayConfig` default 250x122).
+/// `hardware.rs::push_frame` calls this before `repack_for_panel` whenever
+/// it detects exactly that swapped relationship; see that call site.
+///
+/// `rotation` picks the transpose direction: `Rotate270` transposes
+/// counter-clockwise, everything else (`Rotate0`/`Rotate90`) transposes
+/// clockwise, and `Rotate180` additionally flips the result 180 degrees on
+/// top of the clockwise transpose. Which literal direction is physically
+/// correct depends on how a given panel is mounted in its enclosure and
+/// has **not** been confirmed against real silicon (see `hardware.rs`
+/// module docs) -- if the on-panel image comes out mirrored or upside
+/// down on real hardware, change `ui.display.rotation` in config.toml
+/// (that's exactly what the knob is for) rather than editing this
+/// function.
+#[cfg_attr(not(feature = "hardware"), allow(dead_code))]
+pub(crate) fn transpose_frame(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    rotation: DisplayRotation,
+) -> Vec<u8> {
+    let (w, h) = (width as usize, height as usize);
+    let mut dst = vec![0u8; packed_frame_bytes(height, width)];
+    let ccw = rotation == DisplayRotation::Rotate270;
+    let flip180 = rotation == DisplayRotation::Rotate180;
+    // Output buffer is logically (height x width): rotating a (w x h)
+    // image 90 deg clockwise lands pixel (x,y) at (h-1-y, x) in the
+    // resulting (h x w) image; counter-clockwise lands it at (y, w-1-x).
+    for y in 0..h {
+        for x in 0..w {
+            let src_index = y * w + x;
+            let src_byte = src_index / 8;
+            let src_bit = src_index % 8;
+            if src_byte >= src.len() {
+                continue;
+            }
+            if (src[src_byte] >> src_bit) & 1 == 0 {
+                continue;
+            }
+            let (mut dx, mut dy) = if ccw { (y, w - 1 - x) } else { (h - 1 - y, x) };
+            if flip180 {
+                dx = h - 1 - dx;
+                dy = w - 1 - dy;
+            }
+            let dst_index = dy * h + dx;
+            dst[dst_index / 8] |= 1 << (dst_index % 8);
+        }
+    }
+    dst
+}
+
 /// Software fallback backend: stores the framebuffer and logs, doing no
 /// real I/O. Used whenever the `hardware` feature is disabled, and also as
 /// the state kept alongside the real backend so `last_frame()` keeps
@@ -246,7 +304,18 @@ pub struct DisplayDriver {
     awake: bool,
     initialized: bool,
     backend: Backend,
+    has_refreshed_once: bool,
+    partials_since_full: u32,
 }
+
+/// After this many consecutive partial/quick-LUT refreshes, force a full
+/// refresh even if the caller asked for another partial one. Partial mode
+/// only redraws the delta from the panel's internally-tracked previous
+/// frame and never fully cycles every pixel, so long unbroken streaks of
+/// it visibly ghost on real e-ink hardware. This project's own main loop
+/// unconditionally calls `update(true)` on every tick with no periodic
+/// full refresh of its own, so `DisplayDriver` has to enforce this itself.
+const FULL_REFRESH_EVERY: u32 = 50;
 
 impl DisplayDriver {
     pub fn new(config: &DisplayConfig) -> Result<Self> {
@@ -258,6 +327,8 @@ impl DisplayDriver {
             backend: Backend::Soft(SoftBackend {
                 last_frame: vec![0; bytes],
             }),
+            has_refreshed_once: false,
+            partials_since_full: 0,
         })
     }
 
@@ -297,22 +368,81 @@ impl DisplayDriver {
         if !self.initialized {
             anyhow::bail!("Display not initialized");
         }
+
+        // Force a full refresh on the very first update after init (the
+        // panel has no valid previous-frame baseline yet -- a caller-
+        // requested partial here renders incompletely on real hardware,
+        // confirmed the hard way) and every `FULL_REFRESH_EVERY` partial
+        // refreshes thereafter, to bound ghosting. An explicit
+        // `partial=false` from the caller always wins/resets the streak.
+        let force_full = !partial || !self.has_refreshed_once || self.partials_since_full >= FULL_REFRESH_EVERY;
+        let effective_partial = partial && !force_full;
+        self.has_refreshed_once = true;
+        if effective_partial {
+            self.partials_since_full += 1;
+        } else {
+            self.partials_since_full = 0;
+        }
+
         info!(
-            "Flushing {} bytes to display (partial={})",
+            "Flushing {} bytes to display (partial={}, requested_partial={})",
             buffer.len(),
+            effective_partial,
             partial
         );
 
-        match &mut self.backend {
-            Backend::Soft(soft) => {
+        // `linux-embedded-hal`'s spidev/gpio-cdev calls in the hardware
+        // backend are plain blocking syscalls, not tokio-aware -- measured
+        // on real hardware, a full e-ink refresh takes ~2.8s and a partial
+        // one ~800ms. Running that inline previously stalled the *entire*
+        // async runtime for that long (AO event handling, the display's own
+        // 1s tick, the watchdog, all of it), which is why the display never
+        // felt responsive even after decoupling its tick interval. The
+        // whole backend is moved into `spawn_blocking` and handed back
+        // afterwards so only this write's own task blocks, not the runtime.
+        let backend_start = std::time::Instant::now();
+        let width = self.config.width;
+        let height = self.config.height;
+        let placeholder = Backend::Soft(SoftBackend {
+            last_frame: Vec::new(),
+        });
+        let backend = std::mem::replace(&mut self.backend, placeholder);
+        let (backend, result): (Backend, Result<()>) = match backend {
+            Backend::Soft(mut soft) => {
                 soft.last_frame.clear();
                 soft.last_frame.extend_from_slice(buffer);
+                (Backend::Soft(soft), Ok(()))
             }
             #[cfg(feature = "hardware")]
-            Backend::Hardware(panel) => {
-                panel.push_frame(buffer, self.config.width, self.config.height, partial)?;
+            Backend::Hardware(mut panel) => {
+                let buffer = buffer.to_vec();
+                let join_result = tokio::task::spawn_blocking(move || {
+                    let result = panel.push_frame(&buffer, width, height, effective_partial);
+                    (panel, result)
+                })
+                .await;
+                match join_result {
+                    Ok((panel, result)) => (Backend::Hardware(panel), result),
+                    Err(join_err) => (
+                        Backend::Soft(SoftBackend {
+                            last_frame: vec![0; packed_frame_bytes(width, height)],
+                        }),
+                        Err(anyhow::anyhow!(
+                            "display backend task panicked, falling back to no-op backend: {join_err}"
+                        )),
+                    ),
+                }
             }
+        };
+        self.backend = backend;
+        let backend_elapsed = backend_start.elapsed();
+        if backend_elapsed > std::time::Duration::from_millis(200) {
+            info!(
+                "Display backend write took {:?} (partial={}, off the async runtime via spawn_blocking)",
+                backend_elapsed, effective_partial
+            );
         }
+        result?;
         Ok(())
     }
 
@@ -382,6 +512,56 @@ mod tests {
         assert!(driver.update(&[0u8; 10], false).await.is_err());
         driver.init().await.unwrap();
         assert!(driver.update(&[0u8; 10], false).await.is_ok());
+    }
+
+    #[cfg(not(feature = "hardware"))]
+    #[tokio::test]
+    async fn test_first_update_forces_full_refresh_even_if_partial_requested() {
+        let config = DisplayConfig::default();
+        let mut driver = DisplayDriver::new(&config).unwrap();
+        driver.init().await.unwrap();
+        assert!(!driver.has_refreshed_once);
+        driver.update(&[0u8; 10], true).await.unwrap();
+        assert!(driver.has_refreshed_once);
+        // The very first refresh must not count towards the partial
+        // streak -- it was forced full regardless of the request.
+        assert_eq!(driver.partials_since_full, 0);
+    }
+
+    #[cfg(not(feature = "hardware"))]
+    #[tokio::test]
+    async fn test_periodic_full_refresh_resets_partial_streak() {
+        let config = DisplayConfig::default();
+        let mut driver = DisplayDriver::new(&config).unwrap();
+        driver.init().await.unwrap();
+        // Consume the mandatory first-refresh-is-full case before
+        // measuring the periodic streak.
+        driver.update(&[0u8; 10], true).await.unwrap();
+        assert_eq!(driver.partials_since_full, 0);
+        for i in 0..FULL_REFRESH_EVERY {
+            driver.update(&[0u8; 10], true).await.unwrap();
+            assert_eq!(driver.partials_since_full, i + 1);
+        }
+        // The next partial-requested update lands on the forced-full
+        // boundary and resets the streak instead of extending it.
+        driver.update(&[0u8; 10], true).await.unwrap();
+        assert_eq!(driver.partials_since_full, 0);
+    }
+
+    #[cfg(not(feature = "hardware"))]
+    #[tokio::test]
+    async fn test_explicit_full_request_resets_partial_streak() {
+        let config = DisplayConfig::default();
+        let mut driver = DisplayDriver::new(&config).unwrap();
+        driver.init().await.unwrap();
+        // Consume the mandatory first-refresh-is-full case first.
+        driver.update(&[0u8; 10], true).await.unwrap();
+        assert_eq!(driver.partials_since_full, 0);
+        driver.update(&[0u8; 10], true).await.unwrap();
+        driver.update(&[0u8; 10], true).await.unwrap();
+        assert_eq!(driver.partials_since_full, 2);
+        driver.update(&[0u8; 10], false).await.unwrap();
+        assert_eq!(driver.partials_since_full, 0);
     }
 
     #[test]
@@ -483,5 +663,52 @@ mod tests {
                                   // x=8 is bit 0 of the *second* byte in the row (0x80 >> (8%8) == 0x80).
         assert_eq!(dst[0], 0xFF); // x=0..7 all white
         assert_eq!(dst[1], 0x7F); // x=8 (bit 7 of row-byte 1) is black
+    }
+
+    #[test]
+    fn test_transpose_frame_swaps_dimensions() {
+        let (width, height) = (2u32, 3u32);
+        let src = vec![0u8; packed_frame_bytes(width, height)];
+        let dst = transpose_frame(&src, width, height, DisplayRotation::Rotate0);
+        assert_eq!(dst.len(), packed_frame_bytes(height, width));
+    }
+
+    #[test]
+    fn test_transpose_frame_clockwise() {
+        // 2-wide x 3-tall source, top-left pixel (0,0) on. A 90-degree
+        // clockwise rotation sends the top-left corner to the top-right
+        // corner of the resulting 3-wide x 2-tall image, i.e. (x=2, y=0).
+        let (width, height) = (2u32, 3u32);
+        let mut src = vec![0u8; packed_frame_bytes(width, height)];
+        src[0] |= 1; // (x=0, y=0)
+        let dst = transpose_frame(&src, width, height, DisplayRotation::Rotate90);
+        let expect_index = 0usize * height as usize + 2; // (dx=2, dy=0), out width=height=3
+        assert_eq!((dst[expect_index / 8] >> (expect_index % 8)) & 1, 1);
+        assert_eq!(dst.iter().map(|b| b.count_ones()).sum::<u32>(), 1);
+    }
+
+    #[test]
+    fn test_transpose_frame_counter_clockwise() {
+        // Same source as above; a 90-degree counter-clockwise rotation
+        // sends the top-left corner to the bottom-left corner of the
+        // resulting 3-wide x 2-tall image, i.e. (x=0, y=1).
+        let (width, height) = (2u32, 3u32);
+        let mut src = vec![0u8; packed_frame_bytes(width, height)];
+        src[0] |= 1; // (x=0, y=0)
+        let dst = transpose_frame(&src, width, height, DisplayRotation::Rotate270);
+        let expect_index = 1usize * height as usize; // (dx=0, dy=1), out width=height=3
+        assert_eq!((dst[expect_index / 8] >> (expect_index % 8)) & 1, 1);
+    }
+
+    #[test]
+    fn test_transpose_frame_180_flips_on_top_of_clockwise() {
+        // Rotate180 takes the clockwise result (top-right) and flips it to
+        // the opposite corner (bottom-left) of the 3x2 output.
+        let (width, height) = (2u32, 3u32);
+        let mut src = vec![0u8; packed_frame_bytes(width, height)];
+        src[0] |= 1; // (x=0, y=0)
+        let dst = transpose_frame(&src, width, height, DisplayRotation::Rotate180);
+        let expect_index = 1usize * height as usize; // (dx=0, dy=1)
+        assert_eq!((dst[expect_index / 8] >> (expect_index % 8)) & 1, 1);
     }
 }

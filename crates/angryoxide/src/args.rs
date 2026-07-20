@@ -90,8 +90,18 @@ impl Default for AngryOxideConfig {
         Self {
             binary: "/usr/local/bin/angryoxide".to_string(),
             interface: "wlan0".to_string(),
-            channels: Some("1,6,11".to_string()),
-            band: None,
+            // "1,6,11" are AP-*planning* non-overlapping channels, not a
+            // hardware limit -- restricting a monitor/attack tool to
+            // just those three leaves it blind to every real AP sitting
+            // on 2/3/4/5/7/8/9/10/12/13 (routers auto-select across the
+            // whole band). This project's target hardware (BCM43430 on
+            // Pi Zero W, BCM43436B0 on Pi Zero 2W) is 2.4GHz-only, so
+            // `-b 2` ("scan the whole 2.4GHz band") is the correct,
+            // hardware-honest default -- AngryOxide queries the
+            // interface's own actual supported/regulatory-allowed
+            // channel list for that band instead of us guessing one.
+            channels: None,
+            band: Some(2),
             output: None,
             rate: 2,
             targets: Vec::new(),
@@ -341,9 +351,24 @@ mod tests {
 
         assert!(args.contains(&"-i".to_string()));
         assert!(args.contains(&"wlan0".to_string()));
+        // Default scans the whole 2.4GHz band (`-b 2`), not a hardcoded
+        // 3-channel subset -- see the doc comment on
+        // `AngryOxideConfig::default()`'s `band` field.
+        assert!(args.contains(&"-b".to_string()));
+        assert!(args.contains(&"2".to_string()));
+        assert!(!args.contains(&"-c".to_string()));
+        assert!(args.contains(&"--headless".to_string()));
+    }
+
+    #[test]
+    fn test_explicit_channels_take_precedence_over_band() {
+        let mut config = AngryOxideConfig::default();
+        config.channels = Some("1,6,11".to_string());
+        let args = build_args(&config).unwrap();
+
         assert!(args.contains(&"-c".to_string()));
         assert!(args.contains(&"1,6,11".to_string()));
-        assert!(args.contains(&"--headless".to_string()));
+        assert!(!args.contains(&"-b".to_string()));
     }
 
     #[test]
