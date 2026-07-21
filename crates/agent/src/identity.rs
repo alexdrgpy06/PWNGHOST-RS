@@ -70,9 +70,9 @@ impl Identity {
 
     fn from_hex_seed(hex_str: &str) -> Result<Self> {
         let bytes = hex::decode(hex_str).context("identity file is not valid hex")?;
-        let seed: [u8; 32] = bytes
-            .try_into()
-            .map_err(|v: Vec<u8>| anyhow::anyhow!("expected 32-byte seed, got {} bytes", v.len()))?;
+        let seed: [u8; 32] = bytes.try_into().map_err(|v: Vec<u8>| {
+            anyhow::anyhow!("expected 32-byte seed, got {} bytes", v.len())
+        })?;
         Ok(Self::from_seed(seed))
     }
 
@@ -83,7 +83,9 @@ impl Identity {
     /// "never leave a torn write behind" reason).
     async fn persist(&self, path: &Path) -> Result<()> {
         let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-        let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        let dir = dir
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
         fs::create_dir_all(&dir)
             .await
             .with_context(|| format!("creating identity directory {dir:?}"))?;
@@ -209,6 +211,9 @@ mod tests {
             .unwrap();
 
         let result = Identity::load_or_generate(&path).await;
-        assert!(result.is_err(), "corrupt identity file must not be silently regenerated");
+        assert!(
+            result.is_err(),
+            "corrupt identity file must not be silently regenerated"
+        );
     }
 }

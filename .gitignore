@@ -19,3 +19,4 @@ tools/rebase-jayofelony/work3/
 tools/rebase-jayofelony/mnt-boot/
 tools/rebase-jayofelony/mnt-root/
 tools/rebase-jayofelony/base.img
+tools/rebase-jayofelony/.build.lock

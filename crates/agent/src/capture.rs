@@ -289,7 +289,11 @@ mod tests {
             .collect();
         assert!(names.contains(&"MyNetwork_aabbccddeeff.pcap".to_string()));
         assert!(names.contains(&"legacy.pcapng".to_string()));
-        assert_eq!(found.len(), 2, "expected exactly the two capture files, got {names:?}");
+        assert_eq!(
+            found.len(),
+            2,
+            "expected exactly the two capture files, got {names:?}"
+        );
     }
 
     #[test]

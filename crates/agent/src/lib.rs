@@ -414,7 +414,6 @@ impl Agent {
             }
         }
     }
-
 }
 
 /// Actions the agent can take

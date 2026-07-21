@@ -47,9 +47,7 @@ pub struct CrackedPassword {
 /// plugin's doc comment), no on-device QR/captive-portal UI (those need the
 /// plugin host API + `on_webhook` this project doesn't have yet -- see
 /// REWORK_PLAN.md Workstream D).
-pub async fn get_cracked(
-    State(state): State<Arc<RwLock<AppState>>>,
-) -> Json<Vec<CrackedPassword>> {
+pub async fn get_cracked(State(state): State<Arc<RwLock<AppState>>>) -> Json<Vec<CrackedPassword>> {
     let dir = state.read().await.cracked_dir.clone();
     let mut out = Vec::new();
     let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
@@ -174,7 +172,10 @@ pub async fn update_plugin_options(
     let mut plugins_patch = serde_json::Map::new();
     plugins_patch.insert(name.clone(), serde_json::Value::Object(plugin_patch));
     let mut patch = serde_json::Map::new();
-    patch.insert("plugins".to_string(), serde_json::Value::Object(plugins_patch));
+    patch.insert(
+        "plugins".to_string(),
+        serde_json::Value::Object(plugins_patch),
+    );
     let patch = serde_json::Value::Object(patch);
 
     let path = state.config_path.clone();
@@ -756,9 +757,12 @@ mod tests {
             "api_url".to_string(),
             serde_json::Value::String("https://example.test/".to_string()),
         );
-        let resp =
-            update_plugin_options(State(state.clone()), Path("wpa_sec".to_string()), Json(patch))
-                .await;
+        let resp = update_plugin_options(
+            State(state.clone()),
+            Path("wpa_sec".to_string()),
+            Json(patch),
+        )
+        .await;
         assert_eq!(resp.0["status"], "ok");
 
         let guard = state.read().await;

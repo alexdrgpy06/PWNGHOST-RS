@@ -988,10 +988,9 @@ async fn main() -> anyhow::Result<()> {
     // no agent attached; non-fatal if bettercap is already unreachable.
     {
         let bc = bc.clone();
-        if let Err(e) =
-            tokio::task::spawn_blocking(move || bc.run_command("wifi.recon off"))
-                .await
-                .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+        if let Err(e) = tokio::task::spawn_blocking(move || bc.run_command("wifi.recon off"))
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
         {
             warn!("Failed to stop bettercap wifi.recon on shutdown: {}", e);
         }

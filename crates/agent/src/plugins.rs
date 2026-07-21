@@ -119,7 +119,10 @@ impl PluginManager {
     /// flag. Unlisted plugins default to enabled (matches `PluginConfig`'s
     /// own default), but every built-in is listed in `defaults.toml`, so in
     /// practice this reads the real per-plugin flag.
-    fn plugin_enabled(plugins_cfg: &HashMap<String, config::schema::PluginConfig>, name: &str) -> bool {
+    fn plugin_enabled(
+        plugins_cfg: &HashMap<String, config::schema::PluginConfig>,
+        name: &str,
+    ) -> bool {
         plugins_cfg.get(name).map(|p| p.enabled).unwrap_or(true)
     }
 
