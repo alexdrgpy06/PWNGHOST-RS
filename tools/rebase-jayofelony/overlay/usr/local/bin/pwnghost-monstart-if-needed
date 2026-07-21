@@ -1,0 +1,21 @@
+#!/bin/bash
+# Idempotent wrapper around the real jayofelony `monstart` script
+# (`/usr/bin/monstart` -> `start_monitor_interface` in `/usr/bin/pwnlib`).
+#
+# Why this exists: `start_monitor_interface` unconditionally runs
+# `iw phy ... interface add wlan0mon type monitor` with no existence check
+# (confirmed directly from pwnlib's real source). Calling it a second time
+# while `wlan0mon` already exists fails (`iw` can't add an interface with a
+# name already in use), so wiring `monstart` itself as bettercap.service's
+# `ExecStartPre=` would break `Restart=always`: the first crash+restart
+# cycle would fail the pre-start step and stop bettercap from ever coming
+# back up. This wrapper only calls the real `monstart` when `wlan0mon`
+# doesn't already exist.
+set -euo pipefail
+
+if ip link show wlan0mon >/dev/null 2>&1; then
+    echo "pwnghost-monstart-if-needed: wlan0mon already exists, skipping monstart"
+    exit 0
+fi
+
+exec /usr/bin/monstart

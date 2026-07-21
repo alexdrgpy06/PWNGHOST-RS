@@ -1,0 +1,29 @@
+[Unit]
+Description=bettercap (real capture engine for pwnghost-rs, Phase 1 rework)
+Documentation=https://bettercap.org
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+LimitNOFILE=65535
+TasksMax=infinity
+# Idempotent: safe to run again on every `Restart=always` cycle, unlike the
+# real jayofelony `monstart` on its own (see pwnghost-monstart-if-needed's
+# own doc comment for why -- it fails the second time wlan0mon exists).
+ExecStartPre=/usr/local/bin/pwnghost-monstart-if-needed
+# api.rest bound to loopback only, credentials matching this project's
+# config.toml [bettercap] defaults (crates/config/src/schema.rs). Real
+# pwnagotchi's own bettercap-launcher uses a caplet file for this same
+# purpose (pwnagotchi-auto.cap); we set it up directly via -eval instead,
+# since we don't use their caplet system.
+ExecStart=/usr/local/bin/bettercap -no-colors -iface wlan0mon -eval "set api.rest.username pwnghost; set api.rest.password pwnghost; set api.rest.address 127.0.0.1; set api.rest.port 8081; api.rest on"
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bettercap
+
+[Install]
+WantedBy=multi-user.target

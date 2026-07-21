@@ -108,13 +108,22 @@ setup is used as-is instead.
 ## Building
 
 Requires Docker (privileged, for loop-mount + chroot) and a pre-built set
-of cross-compiled artifacts from the existing `Dockerfile.builder` (repo
-root):
+of cross-compiled artifacts -- from `Dockerfile.crosscompile` (this
+directory), **not** the repo-root `Dockerfile.builder`. `Dockerfile.builder`
+links against bookworm's glibc (~2.36); every base version this pipeline
+supports (v2.8.9 bullseye, glibc 2.31; v2.9.5.3 bookworm, glibc ~2.36 --
+same as builder, but keeping one build path avoids two artifact sets) needs
+a binary linked against the *oldest* glibc among them, since glibc symbol
+versioning is forward-compatible only. Confirmed the hard way on real
+hardware: a `Dockerfile.builder`-linked binary flashed onto a v2.8.9 image
+fails outright at startup with `version 'GLIBC_2.32' not found`, and
+`pwnghost-rs.service` crash-loops (`Start request repeated too quickly`)
+without ever drawing a single frame to the display.
 
 ```bash
 # From the repo root, produce artifacts/{arm-unknown-linux-gnueabihf,armv7-unknown-linux-gnueabihf}/{pwnghost-rs,wlan_keepalive}
-docker build -t pwnghost-builder -f Dockerfile.builder .
-docker create --name extract pwnghost-builder
+docker build -t pwnghost-crosscompile-bullseye -f tools/rebase-jayofelony/Dockerfile.crosscompile .
+docker create --name extract pwnghost-crosscompile-bullseye
 docker cp extract:/workspace/artifacts ./tools/rebase-jayofelony/artifacts
 docker rm extract
 

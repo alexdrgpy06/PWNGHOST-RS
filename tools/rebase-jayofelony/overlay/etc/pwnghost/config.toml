@@ -1,10 +1,3 @@
-# PWNGHOST-RS Configuration for Raspberry Pi Zero W / Zero 2W
-# Waveshare V4 e-ink display (2.13" / 2.7" / 2.9")
-#
-# Kept byte-for-byte identical to pi-gen/stage5/00-install-pwnghost's
-# shipped default (see that file for the from-scratch build's copy) so
-# the two pipelines' default behavior doesn't drift apart.
-
 [main]
 name = "pwnghost"
 lang = "en"
@@ -17,6 +10,8 @@ whitelist = []
 confd = "/etc/pwnghost/conf.d/"
 custom_plugin_repos = []
 custom_plugins = "/usr/local/share/pwnghost/custom-plugins/"
+
+[main.plugins]
 
 [main.log]
 path = "/var/log/pwnghost/pwnghost.log"
@@ -45,6 +40,10 @@ hop_recon_time = 10
 deauth = false
 associate = false
 min_rssi = -80
+position_x = 0
+position_y = 34
+frame_padding = true
+frame_padding_min_bytes = 650
 
 [ui.web]
 enabled = true
@@ -69,27 +68,26 @@ display_type = "waveshare_v4"
 [ui.faces]
 png = false
 position_x = 0
-position_y = 16
+position_y = 34
 
 [bettercap]
 handshakes = "/etc/pwnghost/handshakes"
 silence = [
-    "ble.device.new", "ble.device.lost",
-    "wifi.client.new", "wifi.client.lost",
-    "wifi.ap.new", "wifi.ap.lost",
-    "mod.started"
+    "ble.device.new",
+    "ble.device.lost",
+    "wifi.client.new",
+    "wifi.client.lost",
+    "wifi.ap.new",
+    "wifi.ap.lost",
+    "mod.started",
 ]
+hostname = "127.0.0.1"
+port = 8081
+username = "pwnghost"
+password = "pwnghost"
 
 [fs]
 enabled = true
-
-[fs.mounts.log]
-enabled = true
-mount = "/var/log/pwnghost/"
-size = "50M"
-sync = 60
-zram = true
-rsync = true
 
 [fs.mounts.data]
 enabled = true
@@ -99,17 +97,77 @@ sync = 3600
 zram = true
 rsync = true
 
-[plugins.auto_tune]
+[fs.mounts.log]
+enabled = true
+mount = "/var/log/pwnghost/"
+size = "50M"
+sync = 60
+zram = true
+rsync = true
+
+[agent]
+epoch_duration = 15
+
+[plugins.auto_update]
+enabled = true
+
+[plugins.ohcapi]
 enabled = true
 
 [plugins.auto_backup]
 enabled = true
 
-[plugins.auto_update]
+[plugins.pwncrack]
+enabled = false
+
+[plugins.pwnstore_ui]
+enabled = true
+
+[plugins.webcfg]
+enabled = true
+
+[plugins.cache]
+enabled = true
+
+[plugins.webgpsmap]
+enabled = true
+
+[plugins.pisugarx]
 enabled = true
 
 [plugins.grid]
 enabled = true
 
-[plugins.webcfg]
+[plugins.auto_tune]
+enabled = true
+
+[plugins.session_stats]
+enabled = true
+
+[plugins.wigle]
+enabled = true
+
+[plugins.gpio_buttons]
+enabled = true
+
+[plugins.bt_tether]
+enabled = true
+
+[plugins.fix_services]
+enabled = true
+
+[plugins.gps]
+enabled = true
+
+[plugins.ups_lite]
+enabled = true
+
+[plugins.wpa_sec]
+enabled = true
+api_key = "test-api-key-123"
+
+[plugins.logtail]
+enabled = true
+
+[plugins.memtemp]
 enabled = true

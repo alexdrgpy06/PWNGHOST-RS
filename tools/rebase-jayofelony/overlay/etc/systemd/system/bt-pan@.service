@@ -1,0 +1,13 @@
+[Unit]
+Description=Bluetooth PAN Tether for %i
+After=network-online.target bluetooth.service bt-agent.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/bt-pan-connect %i
+ExecStop=/usr/local/bin/bt-pan-disconnect %i
+
+[Install]
+WantedBy=multi-user.target

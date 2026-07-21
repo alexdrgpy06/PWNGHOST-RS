@@ -30,11 +30,30 @@ local function read_config_value(section, key)
   return body:match(key .. '%s*=%s*"([^"]*)"') or body:match(key .. "%s*=%s*([%d%.]+)")
 end
 
--- This project has no live Bluetooth PAN management wired into Lua's
--- reach (nothing here can call into `crates/radio/src/bluetooth.rs`), so
--- this plugin drives `bluetoothctl` directly, same as a user would from a
--- shell -- it can trust/pair-assuming devices, but won't fabricate a
--- working tether if the tooling isn't present.
+-- POSIX shell single-quote escaping, same pattern as pwncrack.lua's
+-- shell_quote -- phone_mac ultimately comes from a user-edited
+-- config.toml value, so it shouldn't be trusted to never contain shell
+-- metacharacters just because it's "supposed to be" a MAC address.
+local function shell_quote(s)
+  s = s or ""
+  return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
+-- This project's Rust-side Bluetooth code (crates/radio/src/bluetooth.rs)
+-- isn't wired into the running agent's mode-selection logic yet, so this
+-- plugin drives the same bt-pan@<MAC>.service systemd template unit a
+-- user would start by hand (installed by this project's own overlay --
+-- see tools/rebase-jayofelony/overlay and pi-gen/stage5's runtime
+-- overlay -- ExecStart=/usr/local/bin/bt-pan-connect %i). Just calling
+-- `bluetoothctl connect` (an earlier revision of this plugin) only
+-- establishes the BT-level connection, not the actual PAN network
+-- interface (bnep0 + DHCP) -- bt-pan-connect does both, so going through
+-- the systemd unit instead gives a real working tether, not just a paired
+-- device.
+local function mac_to_instance(mac)
+  return (mac:gsub(":", "-"))
+end
+
 local function init()
   if initialized then
     return
@@ -58,14 +77,16 @@ local function init()
   io.stderr:write(string.format("[bt_tether] ready, will check %s every %d epoch(s)\n", phone_mac, check_interval))
 end
 
-local function is_connected(mac)
-  local handle = io.popen("bluetoothctl info " .. mac .. " 2>/dev/null")
-  if not handle then
-    return false
-  end
-  local out = handle:read("*a")
-  handle:close()
-  return out:find("Connected: yes") ~= nil
+-- bluetoothctl reporting "Connected: yes" only proves the BT-level link
+-- is up, not that the bnep PAN interface (the thing that actually gives
+-- internet access) is. Check the systemd unit's own active state instead
+-- -- bt-pan-connect only exits 0 (leaving the oneshot unit "active")
+-- once it found a bnep interface and brought it up, so this is a real
+-- tether check, not just a paired-device check.
+local function pan_active(mac)
+  local unit = "bt-pan@" .. mac_to_instance(mac) .. ".service"
+  local ok = os.execute("systemctl is-active --quiet " .. shell_quote(unit))
+  return ok == true
 end
 
 function on_ready()
@@ -84,17 +105,20 @@ function on_epoch()
     return true
   end
 
-  if is_connected(phone_mac) then
-    io.stderr:write("[bt_tether] " .. phone_mac .. " already connected\n")
+  if pan_active(phone_mac) then
+    io.stderr:write("[bt_tether] " .. phone_mac .. " PAN tether already active\n")
     return true
   end
 
-  io.stderr:write("[bt_tether] " .. phone_mac .. " not connected, attempting connect\n")
-  local ok = os.execute("bluetoothctl connect " .. phone_mac .. " >/dev/null 2>&1")
+  io.stderr:write("[bt_tether] " .. phone_mac .. " PAN tether not active, starting bt-pan@ unit\n")
+  local unit = "bt-pan@" .. mac_to_instance(phone_mac) .. ".service"
+  local ok = os.execute("systemctl start " .. shell_quote(unit) .. " >/dev/null 2>&1")
   if ok == true then
-    io.stderr:write("[bt_tether] connect command succeeded for " .. phone_mac .. "\n")
+    io.stderr:write("[bt_tether] " .. unit .. " started for " .. phone_mac .. "\n")
   else
-    io.stderr:write("[bt_tether] connect command failed for " .. phone_mac .. "\n")
+    io.stderr:write("[bt_tether] " .. unit .. " failed to start for " .. phone_mac
+      .. " (device may not be paired/in range yet -- bt-pan-connect itself also "
+      .. "runs pair/trust/connect via bluetoothctl, see bt-pan-connect script)\n")
   end
 
   return true

@@ -1,0 +1,29 @@
+#!/bin/bash
+# bt-pan-disconnect - Disconnect Bluetooth PAN device
+# Usage: bt-pan-disconnect <MAC_ADDRESS>
+
+set -euo pipefail
+
+MAC="$1"
+if [[ -z "$MAC" ]]; then
+    echo "Usage: $0 <MAC_ADDRESS>"
+    exit 1
+fi
+
+MAC="${MAC//-/:}"
+MAC="${MAC^^}"
+
+echo "Disconnecting Bluetooth PAN device: $MAC"
+
+bluetoothctl << EOF
+disconnect $MAC
+EOF
+
+# Bring down any bnep interfaces
+for iface in $(ip link show | grep -i "bnep" | awk -F': ' '{print $2}'); do
+    ip link set "$iface" down 2>/dev/null || true
+    dhcpcd -k "$iface" 2>/dev/null || true
+done
+
+echo "Bluetooth PAN disconnected"
+exit 0

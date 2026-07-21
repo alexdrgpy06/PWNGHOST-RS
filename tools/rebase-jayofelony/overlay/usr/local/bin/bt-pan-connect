@@ -1,0 +1,54 @@
+#!/bin/bash
+# bt-pan-connect - Connect to Bluetooth PAN device
+# Usage: bt-pan-connect <MAC_ADDRESS>
+
+set -euo pipefail
+
+MAC="$1"
+if [[ -z "$MAC" ]]; then
+    echo "Usage: $0 <MAC_ADDRESS>"
+    exit 1
+fi
+
+# Normalize MAC
+MAC="${MAC//-/:}"
+MAC="${MAC^^}"
+
+echo "Connecting to Bluetooth PAN device: $MAC"
+
+# Pair and trust if not already
+bluetoothctl << EOF
+power on
+agent NoInputNoOutput
+default-agent
+pair $MAC
+trust $MAC
+connect $MAC
+EOF
+
+# Wait for connection
+sleep 2
+
+# Find the bnep interface
+for i in {1..10}; do
+    BNEP=$(ip link show | grep -i "bnep" | head -1 | awk -F': ' '{print $2}')
+    if [[ -n "$BNEP" ]]; then
+        echo "Found PAN interface: $BNEP"
+        break
+    fi
+    sleep 1
+done
+
+if [[ -z "$BNEP" ]]; then
+    echo "ERROR: No bnep interface found after connection"
+    exit 1
+fi
+
+# Bring up interface
+ip link set "$BNEP" up
+
+# Request DHCP
+dhcpcd "$BNEP" || true
+
+echo "Bluetooth PAN connected on $BNEP"
+exit 0

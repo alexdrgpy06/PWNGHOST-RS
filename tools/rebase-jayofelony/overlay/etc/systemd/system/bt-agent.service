@@ -1,0 +1,16 @@
+[Unit]
+Description=Bluetooth Auto-Pair Agent (NoInputNoOutput)
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+# Use the standard bluez-tools agent rather than a custom binary. It registers
+# a NoInputNoOutput pairing agent so a phone can pair without a PIN prompt.
+Type=simple
+ExecStartPre=/usr/bin/bluetoothctl discoverable on
+ExecStart=/usr/bin/bt-agent --capability=NoInputNoOutput
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=bluetooth.target

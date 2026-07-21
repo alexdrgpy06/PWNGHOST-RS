@@ -34,6 +34,16 @@ set -euo pipefail
 
 BASE_VERSION="${BASE_VERSION:-2.9.5.3}"
 
+# 64-bit bases (currently just bullseye64) are only viable on Pi Zero 2W
+# hardware -- Pi Zero W's BCM2835/ARM1176JZF-S is ARMv6, 32-bit only, and
+# physically cannot boot an aarch64 kernel at all. Checked here, early,
+# so a bad BOARD/BASE_VERSION combination fails fast instead of partway
+# through a multi-minute image download.
+case "$BASE_VERSION" in
+    bullseye64) IS_64BIT=1 ;;
+    *) IS_64BIT=0 ;;
+esac
+
 # Docker containers typically only pre-populate a handful of /dev/loopN
 # device nodes -- `losetup -f` happily reports the next free NAME (e.g.
 # /dev/loop9) even when that node doesn't actually exist yet, and the
@@ -57,6 +67,10 @@ done
 mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
 update-binfmt --remove qemu-arm 2>/dev/null || true
 update-binfmt --enable qemu-arm 2>/dev/null || true
+# Same story for aarch64, only actually needed for a bullseye64 build --
+# harmless no-op registration otherwise.
+update-binfmt --remove qemu-aarch64 2>/dev/null || true
+update-binfmt --enable qemu-aarch64 2>/dev/null || true
 
 # `update-binfmt` isn't guaranteed to exist (confirmed on real hardware:
 # missing entirely in one run despite having worked in a prior run of
@@ -65,40 +79,59 @@ update-binfmt --enable qemu-arm 2>/dev/null || true
 # of `qemu-arm`, via its own bundled binfmt provisioning, which survives
 # VM restarts independently of anything this script does). Accept
 # whichever handler is actually present rather than hardcoding one name.
+BOARD="${BOARD:?Set BOARD=pi-zero-w or BOARD=pi-zero-2w}"
+if [ "$IS_64BIT" = "1" ] && [ "$BOARD" != "pi-zero-2w" ]; then
+    echo "build.sh: BASE_VERSION='$BASE_VERSION' is a 64-bit base, only supported on BOARD=pi-zero-2w (got BOARD='$BOARD')" >&2
+    exit 1
+fi
+case "$BOARD" in
+    pi-zero-w)  RUST_TARGET="arm-unknown-linux-gnueabihf" ;;
+    pi-zero-2w)
+        if [ "$IS_64BIT" = "1" ]; then
+            RUST_TARGET="aarch64-unknown-linux-gnu"
+        else
+            RUST_TARGET="armv7-unknown-linux-gnueabihf"
+        fi
+        ;;
+    *) echo "build.sh: unknown BOARD='$BOARD' (expected pi-zero-w or pi-zero-2w)" >&2; exit 1 ;;
+esac
+
+# Candidate binfmt handler names differ by target architecture -- an
+# aarch64 chroot needs qemu-aarch64 registered, not qemu-arm, and vice
+# versa. Same "Docker Desktop's WSL2 VM may already have this registered
+# under a short name" caveat as before applies to both families.
+if [ "$IS_64BIT" = "1" ]; then
+    BINFMT_CANDIDATES="qemu-aarch64 aarch64"
+    BINFMT_INTERPRETER_DEFAULT="/usr/bin/qemu-aarch64-static"
+else
+    BINFMT_CANDIDATES="qemu-arm arm"
+    BINFMT_INTERPRETER_DEFAULT="/usr/bin/qemu-arm-static"
+fi
+
 BINFMT_HANDLER=""
-for candidate in qemu-arm arm; do
+for candidate in $BINFMT_CANDIDATES; do
     if [ -e "/proc/sys/fs/binfmt_misc/$candidate" ]; then
         BINFMT_HANDLER="$candidate"
         break
     fi
 done
 if [ -z "$BINFMT_HANDLER" ]; then
-    echo "build.sh: no ARM binfmt_misc handler registered (checked qemu-arm, arm) -- chroot commands will not run" >&2
+    echo "build.sh: no binfmt_misc handler registered for this target (checked: $BINFMT_CANDIDATES) -- chroot commands will not run" >&2
     exit 1
 fi
 echo "build.sh: using binfmt handler '$BINFMT_HANDLER'"
 
 # The registered handler's own `interpreter` path is whatever *that*
-# registration says (Docker Desktop's own `arm` handler points at
-# `/usr/bin/qemu-arm`, not `/usr/bin/qemu-arm-static` -- a different
-# filename than the one this image's Dockerfile installs). Whatever it
-# is, that exact path has to exist inside the chroot too, since the
-# kernel resolves it relative to the executing process's own root, not
-# this container's. Read it dynamically instead of assuming a name.
+# registration says (Docker Desktop's own `arm`/`aarch64` handlers point
+# at `/usr/bin/qemu-arm`/`/usr/bin/qemu-aarch64`, not the `-static`
+# filenames this image's Dockerfile installs). Whatever it is, that exact
+# path has to exist inside the chroot too, since the kernel resolves it
+# relative to the executing process's own root, not this container's.
+# Read it dynamically instead of assuming a name.
 BINFMT_INTERPRETER="$(awk '/^interpreter /{print $2}' "/proc/sys/fs/binfmt_misc/$BINFMT_HANDLER")"
 if [ -z "$BINFMT_INTERPRETER" ]; then
-    BINFMT_INTERPRETER="/usr/bin/qemu-arm-static"
+    BINFMT_INTERPRETER="$BINFMT_INTERPRETER_DEFAULT"
 fi
-
-BOARD="${BOARD:?Set BOARD=pi-zero-w or BOARD=pi-zero-2w}"
-case "$BOARD" in
-    pi-zero-w)  RUST_TARGET="arm-unknown-linux-gnueabihf"; ANGRYOXIDE_ARCH="linux-arm-musl" ;;
-    pi-zero-2w) RUST_TARGET="armv7-unknown-linux-gnueabihf"; ANGRYOXIDE_ARCH="linux-armv7hf-musl" ;;
-    *) echo "build.sh: unknown BOARD='$BOARD' (expected pi-zero-w or pi-zero-2w)" >&2; exit 1 ;;
-esac
-# Same pin as pi-gen/config's ANGRYOXIDE_VERSION -- keep the two build
-# pipelines on the same AngryOxide release.
-ANGRYOXIDE_VERSION="${ANGRYOXIDE_VERSION:-v0.9.2}"
 
 WORK_DIR="${WORK_DIR:-/work}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$WORK_DIR/artifacts}"
@@ -125,6 +158,30 @@ OVERLAY_DIR="${OVERLAY_DIR:-$WORK_DIR/overlay}"
 #     pip install (/usr/local/lib/python3.9/dist-packages/pwnagotchi),
 #     not an isolated venv, and there's no Go/Rust toolchain to strip at
 #     all (confirmed absent, not just untested).
+#   - bullseye64 (v2.6.4, from the separate jayofelony/pwnagotchi-bullseye
+#     repo, NOT jayofelony/pwnagotchi -- that repo's own v2.8.9 also has a
+#     "-64bit" asset but it's built on Bookworm despite the version number
+#     matching the 32-bit bullseye one, confirmed by mounting it directly:
+#     /etc/os-release there is bookworm, not bullseye, so it doesn't
+#     avoid whatever's causing the v2.9.5.3/Bookworm boot problems above.
+#     v2.6.4 is the *last* pwnagotchi-bullseye release with a real arm64
+#     asset -- v2.8.4, that repo's actual latest, dropped back to armhf-
+#     only. Pi Zero 2W-only: Pi Zero W's ARMv6 SoC cannot run an aarch64
+#     kernel at all, checked earlier via the IS_64BIT/BOARD guard. Directly
+#     confirmed by mounting the real image (read-only loop mount, same
+#     method as every other version note here): genuine Debian 11
+#     bullseye, kernel 6.1.21-v8+, brcmfmac.ko has real nexmon patches
+#     (grepped nexmon_nl_ioctl_handler / brcmf_cfg80211_nexmon_set_channel
+#     / nexmon/patches/driver/brcmfmac_6.1.y-nexmon/*.c paths out of the
+#     active module directly, not inferred), pwnagotchi is the same
+#     system-wide pip install layout as v2.8.9 above (not a venv), same
+#     three systemd units (bettercap/pwnagotchi/pwngrid-peer), and
+#     cmdline.txt/config.txt already carry dwc2/g_ether same as the
+#     others. Real-hardware boot validation on Pi Zero 2W is still
+#     pending -- this is a currently-untested candidate being added
+#     because the user's own separate hands-on testing indicates a
+#     bullseye64 image boots reliably where 2.9.5.3/Bookworm didn't, not
+#     because this pipeline has proven it end to end yet.
 case "$BASE_VERSION" in
     2.9.5.3)
         IMG_XZ="$WORK_DIR/pwnagotchi-2.9.5.3-32bit.img.xz"
@@ -136,8 +193,13 @@ case "$BASE_VERSION" in
         IMG_URL="https://github.com/jayofelony/pwnagotchi/releases/download/v2.8.9/pwnagotchi-2.8.9-32bit.img.xz"
         IMG_SHA256="030c7d759cd130ef00bd6e8e741461b9aaea1f013c1a6be9eb2e87062066aa0f"
         ;;
+    bullseye64)
+        IMG_XZ="$WORK_DIR/pwnagotchi-rpi-bullseye-2.6.4-arm64.img.xz"
+        IMG_URL="https://github.com/jayofelony/pwnagotchi-bullseye/releases/download/v2.6.4/pwnagotchi-rpi-bullseye-2.6.4-arm64.img.xz"
+        IMG_SHA256="ba21a1ee196f5bb8171a0932329e7fab478ffd7fb19f84412e6df96670f90299"
+        ;;
     *)
-        echo "build.sh: unknown BASE_VERSION='$BASE_VERSION' (expected 2.9.5.3 or 2.8.9)" >&2
+        echo "build.sh: unknown BASE_VERSION='$BASE_VERSION' (expected 2.9.5.3, 2.8.9, or bullseye64)" >&2
         exit 1
         ;;
 esac
@@ -219,23 +281,25 @@ losetup -o "$ROOT_OFFSET" --sizelimit "$ROOT_SIZE" "$ROOT_LOOP" "$RAW_IMG"
 mount "$BOOT_LOOP" "$BOOT_MNT"
 mount "$ROOT_LOOP" "$ROOT_MNT"
 
-# --- 4. Set up chroot (qemu-arm-static for armhf binaries) ----------------
+# --- 4. Set up chroot (qemu-{arm,aarch64}-static, depending on target) ----
 log "Setting up chroot"
-cp /usr/bin/qemu-arm-static "$ROOT_MNT/usr/bin/qemu-arm-static"
+QEMU_STATIC_BIN="/usr/bin/qemu-arm-static"
+[ "$IS_64BIT" = "1" ] && QEMU_STATIC_BIN="/usr/bin/qemu-aarch64-static"
+cp "$QEMU_STATIC_BIN" "$ROOT_MNT$QEMU_STATIC_BIN"
 # Also place it at whatever path the active binfmt registration's own
 # `interpreter` field points to, if that's a different filename (see the
 # binfmt handler detection above) -- the kernel resolves that path
 # relative to the chroot's own root, so it has to exist there under
-# that exact name too, not just as `qemu-arm-static`.
-if [ "$BINFMT_INTERPRETER" != "/usr/bin/qemu-arm-static" ]; then
+# that exact name too, not just as the plain `qemu-*-static` name.
+if [ "$BINFMT_INTERPRETER" != "$QEMU_STATIC_BIN" ]; then
     mkdir -p "$ROOT_MNT$(dirname "$BINFMT_INTERPRETER")"
-    cp /usr/bin/qemu-arm-static "$ROOT_MNT$BINFMT_INTERPRETER"
+    cp "$QEMU_STATIC_BIN" "$ROOT_MNT$BINFMT_INTERPRETER"
 fi
 mount --bind /proc "$ROOT_MNT/proc"
 mount --bind /sys "$ROOT_MNT/sys"
 mount --bind /dev "$ROOT_MNT/dev"
 
-# --- 5. Strip Python pwnagotchi/bettercap/pwngrid stack + toolchains ------
+# --- 5. Strip Python pwnagotchi/pwngrid stack + toolchains ----------------
 # Every path here was confirmed by directly inspecting a mounted copy of
 # the specific release(s) targeted (see README.md) -- nothing here is
 # guessed from install scripts alone, since paths have genuinely differed
@@ -245,16 +309,28 @@ mount --bind /dev "$ROOT_MNT/dev"
 # doesn't exist on a given base version is a silent no-op, so this list
 # is deliberately a superset covering every version this script supports
 # rather than branching per-version.
-log "Stripping Python pwnagotchi/bettercap/pwngrid stack"
+#
+# Phase 1 of the rework switched this project's capture backend from
+# AngryOxide to bettercap (AngryOxide cannot capture at all on this
+# hardware's FullMAC/nexmon chip -- see crates/bettercap's doc comment),
+# so unlike earlier revisions of this script, bettercap's real binary
+# (`/usr/local/bin/bettercap`) is now KEPT -- pwnghost-rs drives it
+# directly over its REST API, the same architecture real pwnagotchi uses.
+# Only the original jayofelony systemd unit is removed here; our own
+# replacement (`overlay/etc/systemd/system/bettercap.service`, pointed at
+# our own api.rest credentials) is installed by the overlay-copy step
+# below. pwngrid (mesh) is a separate, not-yet-decided workstream (see
+# REWORK_PLAN.md) and stays removed.
+log "Stripping Python pwnagotchi/pwngrid stack (keeping bettercap's binary)"
 chroot "$ROOT_MNT" /bin/bash -euo pipefail -c '
-systemctl disable pwnagotchi.service bettercap.service pwngrid-peer.service 2>/dev/null || true
+systemctl disable pwnagotchi.service pwngrid-peer.service 2>/dev/null || true
 rm -f /etc/systemd/system/pwnagotchi.service \
       /etc/systemd/system/bettercap.service \
       /etc/systemd/system/pwngrid-peer.service
 rm -f /usr/bin/pwnagotchi /usr/bin/pwnagotchi-launcher /usr/local/bin/pwnagotchi
 rm -rf /home/pi/.pwn /home/pi/bettercap /home/pi/pwngrid
 rm -f /home/pi/firmware-nexmon_0.2_all.deb.1 /home/pi/firmware-nexmon_0.2_all.deb.2
-rm -f /usr/local/bin/bettercap /usr/local/bin/pwngrid
+rm -f /usr/local/bin/pwngrid
 rm -rf /usr/local/go
 rm -rf /root/.cargo /root/.rustup
 # v2.8.9-style system-wide pip install (no isolated venv) -- remove the
@@ -272,16 +348,14 @@ log "Installing pwnghost-rs ($RUST_TARGET) + overlay"
 install -m 755 "$ARTIFACTS_DIR/$RUST_TARGET/pwnghost-rs" "$ROOT_MNT/usr/local/bin/pwnghost-rs"
 install -m 755 "$ARTIFACTS_DIR/$RUST_TARGET/wlan_keepalive" "$ROOT_MNT/usr/local/bin/wlan_keepalive"
 
-# AngryOxide was never installed by this rebase pipeline -- pwnghost-rs
-# shells out to /usr/local/bin/angryoxide at startup and hard-fails if
-# it's missing (confirmed on real hardware: service starts, logs
-# "Initializing AngryOxide subprocess...", then "Error: AngryOxide binary
-# not found: /usr/local/bin/angryoxide", exit 1). The from-scratch
-# pi-gen build already installs this the same way in
-# pi-gen/stage4/00-install-artifacts/00-run.sh -- same version pin,
-# same prebuilt static-musl tarball, same install path -- just never
-# ported over here since this pipeline was written independently.
-log "Installing AngryOxide ($ANGRYOXIDE_VERSION, $ANGRYOXIDE_ARCH) + hcxtools"
+# AngryOxide is no longer part of this image (Phase 1 of the rework
+# replaced it with bettercap -- kept installed on this base image already,
+# see step 5 above -- because AngryOxide cannot capture at all on this
+# hardware's FullMAC/nexmon chip; confirmed on real hardware: Frames: 0,
+# high ERs, "NetworkDown"/os error 132 (ERFKILL), across every attempt).
+# hcxtools is still needed (hcxpcapngtool validates bettercap's captures
+# exactly as it did AngryOxide's).
+log "Installing hcxtools"
 chroot "$ROOT_MNT" /bin/bash -euo pipefail -c "
 export DEBIAN_FRONTEND=noninteractive
 # Raspberry Pi's own mirror (raspbian.raspberrypi.org, the source for the
@@ -303,17 +377,6 @@ for attempt in 1 2 3 4 5; do
     echo \"build.sh: apt-get update/install failed (attempt \$attempt/5), retrying in \$((attempt * 10))s\" >&2
     sleep \$((attempt * 10))
 done
-AO_URL='https://github.com/Ragnt/AngryOxide/releases/download/${ANGRYOXIDE_VERSION}/angryoxide-${ANGRYOXIDE_ARCH}.tar.gz'
-AO_TMP=\"\$(mktemp -d)\"
-curl -fsSL \"\$AO_URL\" -o \"\$AO_TMP/angryoxide.tar.gz\"
-tar -xzf \"\$AO_TMP/angryoxide.tar.gz\" -C \"\$AO_TMP\"
-AO_BIN=\"\$(find \"\$AO_TMP\" -maxdepth 2 -type f -name angryoxide | head -1)\"
-if [ -z \"\$AO_BIN\" ]; then
-    echo 'build.sh: ERROR angryoxide binary not found inside release tarball' >&2
-    exit 1
-fi
-install -m 755 \"\$AO_BIN\" /usr/local/bin/angryoxide
-rm -rf \"\$AO_TMP\"
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 "
@@ -355,9 +418,14 @@ sed -i 's/^dtoverlay=spi1-3cs/#dtoverlay=spi1-3cs/' "$BOOT_MNT/config.txt"
 rsync -a -K "$OVERLAY_DIR/" "$ROOT_MNT/"
 
 chroot "$ROOT_MNT" /bin/bash -euo pipefail -c '
-mkdir -p /etc/pwnghost/conf.d /etc/pwnghost/handshakes /var/log/pwnghost /var/tmp/pwnghost /var/lib/pwnghost
+mkdir -p /etc/pwnghost/conf.d /etc/pwnghost/handshakes /var/log/pwnghost /var/tmp/pwnghost /var/lib/pwnghost /var/tmp/pwnghost/bettercap-output
 chmod +x /usr/bin/monstart /usr/bin/monstop /usr/local/bin/*.sh 2>/dev/null || true
+chmod +x /usr/local/bin/pwnghost-monstart-if-needed 2>/dev/null || true
 chmod +x /lib/systemd/system-shutdown/safe-shutdown.sh 2>/dev/null || true
+# bt-pan-connect/disconnect have no .sh extension, so the *.sh glob above
+# does not cover them -- named explicitly, same as pi-gen's own
+# stage5/01-runtime-overlay/00-run.sh does for the same two files.
+chmod +x /usr/local/bin/bt-pan-connect /usr/local/bin/bt-pan-disconnect 2>/dev/null || true
 # The overlay is bind-mounted in from a Windows/NTFS host, whose file
 # modes do not survive the Docker Desktop bind-mount + rsync chain
 # reliably -- confirmed the hard way: systemd warned these two were
@@ -372,7 +440,9 @@ chmod +x /lib/systemd/system-shutdown/safe-shutdown.sh 2>/dev/null || true
 # fails outright and, under set -e, aborted the entire strip+install
 # step on a real run.
 chmod 644 /etc/systemd/system/pwnghost-rs.service \
+          /etc/systemd/system/bettercap.service \
           /etc/systemd/system/wlan_keepalive.service \
+          /etc/systemd/system/wifi-country.service \
           /etc/systemd/system/zram-log.service \
           /etc/systemd/system/zram-data.service \
           /etc/systemd/system/rsync-zram.service \
@@ -381,8 +451,32 @@ chmod 644 /etc/systemd/system/pwnghost-rs.service \
           /etc/systemd/system/buffer-cleaner.timer \
           /etc/systemd/system/bootlog.service \
           /etc/systemd/system/safe-shutdown.service
-systemctl enable pwnghost-rs.service wlan_keepalive.service
+# wifi-country.service (ported from the from-scratch pi-gen build overlay
+# -- see pi-gen/stage5/01-runtime-overlay -- never carried over here
+# originally, see README.md "Not carried over in this first pass" note)
+# unblocks rfkill and sets the regulatory domain before pwnghost-rs starts.
+# Its absence is a confirmed real bug, not a theoretical gap: a real-hardware
+# boot of this rebased image showed wlan0mon permanently stuck in
+# "Operation not possible due to RF-kill" (dhcpcd/wlan_keepalive logs),
+# which is exactly what this service exists to prevent -- this base image
+# never runs a wifi-country first-boot step on its own the way stock
+# Raspberry Pi OS does via raspi-config.
+systemctl enable pwnghost-rs.service bettercap.service wlan_keepalive.service wifi-country.service
 systemctl enable zram-log.service zram-data.service rsync-zram.timer buffer-cleaner.timer bootlog.service safe-shutdown.service 2>/dev/null || true
+# bt-agent.service registers a NoInputNoOutput pairing agent so a phone
+# can pair without a PIN prompt -- ported over from pi-gen's own
+# stage5/01-runtime-overlay (which already had this working) since this
+# pipeline's own overlay never carried it, meaning BT pairing/tethering
+# was silently missing on every rebase-pipeline image despite the base
+# jayofelony image already shipping the bt-agent/bluetoothctl binaries
+# this depends on (confirmed directly by mounting the base image).
+# bt-pan@.service is a template unit started per-device MAC at runtime
+# (systemctl start bt-pan@AA-BB-CC-DD-EE-FF.service -- bt-pan-connect/
+# disconnect expect dashes in the instance name and convert back to
+# colon format internally) -- not enabled here, same as pi-gen's version;
+# bt_tether.lua (crates/lua) is what actually starts/stops it once a
+# phone's MAC is configured.
+systemctl enable bt-agent.service 2>/dev/null || true
 '
 
 # --- 7. Unmount, fsck, shrink, recompress ---------------------------------

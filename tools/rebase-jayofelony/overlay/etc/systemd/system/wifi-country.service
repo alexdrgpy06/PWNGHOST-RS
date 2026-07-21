@@ -1,0 +1,13 @@
+[Unit]
+Description=pwnghost-rs WiFi country/rfkill first-boot setup
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target pwnghost-rs.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/wifi-country.sh
+
+[Install]
+WantedBy=sysinit.target

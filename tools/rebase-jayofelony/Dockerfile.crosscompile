@@ -8,15 +8,21 @@
 # versioning is forward-compatible only (a binary linked against newer
 # glibc symbols can't run on an older glibc), never the reverse. Since
 # this rebase pipeline deliberately supports multiple base OS versions
-# (bullseye v2.8.9, bookworm v2.9.5.3), the binary needs to target the
-# OLDEST glibc among them -- which is then automatically fine on the
-# newer ones too. Dockerfile.builder itself stays on bookworm since
-# that's what its own from-scratch pi-gen build needs for the *build
-# host's* tooling, and changing it risks that already-working pipeline
-# for a problem that's specific to this one.
+# (bullseye v2.8.9, bookworm v2.9.5.3, bullseye64/v2.6.4-arm64), the
+# binary needs to target the OLDEST glibc among them -- which is then
+# automatically fine on the newer ones too. Dockerfile.builder itself
+# stays on bookworm since that's what its own from-scratch pi-gen build
+# needs for the *build host's* tooling, and changing it risks that
+# already-working pipeline for a problem that's specific to this one.
+#
+# aarch64-unknown-linux-gnu (bullseye64, Pi Zero 2W only) is built here
+# too, alongside the two 32-bit armhf targets -- same bullseye glibc
+# baseline applies (this whole image is bullseye-slim), and aarch64 glibc
+# symbol versioning is independent of the armhf targets' anyway.
 FROM debian:bullseye-slim
 
 RUN dpkg --add-architecture armhf
+RUN dpkg --add-architecture arm64
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
@@ -28,22 +34,42 @@ RUN apt-get update && apt-get install -y \
     libssl-dev:armhf \
     libudev-dev:armhf \
     libsqlite3-dev:armhf \
+    gcc-aarch64-linux-gnu \
+    g++-aarch64-linux-gnu \
+    libc6-dev:arm64 \
+    libstdc++-10-dev:arm64 \
+    libssl-dev:arm64 \
+    libudev-dev:arm64 \
+    libsqlite3-dev:arm64 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
     && . "$HOME/.cargo/env" \
-    && rustup target add arm-unknown-linux-gnueabihf armv7-unknown-linux-gnueabihf
+    && rustup target add arm-unknown-linux-gnueabihf armv7-unknown-linux-gnueabihf aarch64-unknown-linux-gnu
 
 ENV CARGO_HOME=/root/.cargo
 ENV PATH=/root/.cargo/bin:$PATH
 ENV PKG_CONFIG_ALLOW_CROSS=1
 ENV CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
 ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 ENV CC_arm_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
 ENV CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
+ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
 ENV CXX_arm_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
 ENV CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
-ENV PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
+ENV CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+# NOT a single shared PKG_CONFIG_PATH -- armhf and arm64 pkg-config .pc
+# files live under different multiarch triplets on the same rootfs and
+# would silently cross-contaminate (an armhf build picking up arm64
+# libssl's .pc, or vice versa) if both were on one PKG_CONFIG_PATH at
+# once. cargo invokes pkg-config fresh per `cargo build` command below,
+# so scoping this per-target-triple via each build's own env is exact
+# rather than relying on pkg-config's own (unreliable across cross
+# targets) arch autodetection.
+ENV PKG_CONFIG_PATH_arm_unknown_linux_gnueabihf=/usr/lib/arm-linux-gnueabihf/pkgconfig
+ENV PKG_CONFIG_PATH_armv7_unknown_linux_gnueabihf=/usr/lib/arm-linux-gnueabihf/pkgconfig
+ENV PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig
 
 WORKDIR /workspace
 COPY . /workspace
@@ -54,15 +80,21 @@ RUN . "$HOME/.cargo/env" && \
     cargo build --release --target arm-unknown-linux-gnueabihf --workspace \
         --features pwnghost-rs/hardware --features pwnghost-rs/linux-gpio && \
     cargo build --release --target armv7-unknown-linux-gnueabihf --workspace \
+        --features pwnghost-rs/hardware --features pwnghost-rs/linux-gpio && \
+    cargo build --release --target aarch64-unknown-linux-gnu --workspace \
         --features pwnghost-rs/hardware --features pwnghost-rs/linux-gpio
 
-RUN mkdir -p /workspace/artifacts/arm-unknown-linux-gnueabihf /workspace/artifacts/armv7-unknown-linux-gnueabihf && \
+RUN mkdir -p /workspace/artifacts/arm-unknown-linux-gnueabihf /workspace/artifacts/armv7-unknown-linux-gnueabihf /workspace/artifacts/aarch64-unknown-linux-gnu && \
     cp /workspace/target/arm-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/arm-unknown-linux-gnueabihf/ && \
-    cp /workspace/target/armv7-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/armv7-unknown-linux-gnueabihf/
+    cp /workspace/target/armv7-unknown-linux-gnueabihf/release/pwnghost-rs /workspace/artifacts/armv7-unknown-linux-gnueabihf/ && \
+    cp /workspace/target/aarch64-unknown-linux-gnu/release/pwnghost-rs /workspace/artifacts/aarch64-unknown-linux-gnu/
 
 RUN arm-linux-gnueabihf-gcc -O2 -marm -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard \
       -o /workspace/artifacts/arm-unknown-linux-gnueabihf/wlan_keepalive \
       /workspace/crates/fw-patcher/vendor/wlan_keepalive.c && \
     arm-linux-gnueabihf-gcc -O2 -marm -mcpu=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard \
       -o /workspace/artifacts/armv7-unknown-linux-gnueabihf/wlan_keepalive \
+      /workspace/crates/fw-patcher/vendor/wlan_keepalive.c && \
+    aarch64-linux-gnu-gcc -O2 -mcpu=cortex-a53 \
+      -o /workspace/artifacts/aarch64-unknown-linux-gnu/wlan_keepalive \
       /workspace/crates/fw-patcher/vendor/wlan_keepalive.c
