@@ -7,5 +7,4 @@ tools/rebase-jayofelony/mnt-boot/
 tools/rebase-jayofelony/mnt-root/
 tools/rebase-jayofelony/*.img
 tools/rebase-jayofelony/*.img.xz
-pi-gen/
 .git/
