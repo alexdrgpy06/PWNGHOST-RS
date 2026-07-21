@@ -32,7 +32,14 @@
 
 set -euo pipefail
 
-BASE_VERSION="${BASE_VERSION:-2.9.5.3}"
+# Bullseye only -- 2.9.5.3 (Bookworm) has confirmed real-hardware boot
+# problems on both boards (kernel panic on Pi Zero 2W, blank-HDMI hang on
+# Pi Zero W, see the BASE_VERSION case statement below) and is never the
+# right default despite being what jayofelony's own repo currently tags
+# "latest". 2.8.9 (32-bit bullseye) is the confirmed-working base for
+# both boards; bullseye64/2.6.4 is the opt-in 64-bit variant for
+# pi-zero-2w only, never picked by default.
+BASE_VERSION="${BASE_VERSION:-2.8.9}"
 
 # 64-bit bases (currently just bullseye64) are only viable on Pi Zero 2W
 # hardware -- Pi Zero W's BCM2835/ARM1176JZF-S is ARMv6, 32-bit only, and

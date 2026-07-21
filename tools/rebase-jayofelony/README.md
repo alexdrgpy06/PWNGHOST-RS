@@ -120,9 +120,25 @@ fails outright at startup with `version 'GLIBC_2.32' not found`, and
 `pwnghost-rs.service` crash-loops (`Start request repeated too quickly`)
 without ever drawing a single frame to the display.
 
+**Resource limits -- read before running.** A real local run of this
+pipeline froze the host machine hard enough to require a reboot, *despite*
+Docker Desktop's WSL2 VM already being capped in `.wslconfig`
+(`memory=10GB`, `swap=4GB`). The VM cap alone doesn't stop a single
+container from filling it and thrashing the VM's swap file, which
+manifests as the whole host going unresponsive rather than a clean
+OOM-kill inside the container. `Dockerfile.crosscompile` now caps cargo's
+own parallelism (`CARGO_BUILD_JOBS=2`) to reduce peak RSS, and every
+command below adds explicit `--memory`/`--cpus` so a single container is
+hard-capped well under the VM's ~9.7GB usable budget, with
+`--memory-swap` equal to `--memory` so a container that does hit the
+ceiling gets OOM-killed with a clear error instead of thrashing.
+**Run the two `docker run` steps one at a time, never concurrently** --
+each is sized to fit inside the VM alone, not two at once.
+
 ```bash
 # From the repo root, produce artifacts/{arm-unknown-linux-gnueabihf,armv7-unknown-linux-gnueabihf}/{pwnghost-rs,wlan_keepalive}
-docker build -t pwnghost-crosscompile-bullseye -f tools/rebase-jayofelony/Dockerfile.crosscompile .
+docker build --memory=6g --memory-swap=6g --cpus=4 \
+  -t pwnghost-crosscompile-bullseye -f tools/rebase-jayofelony/Dockerfile.crosscompile .
 docker create --name extract pwnghost-crosscompile-bullseye
 docker cp extract:/workspace/artifacts ./tools/rebase-jayofelony/artifacts
 docker rm extract
@@ -131,12 +147,15 @@ cd tools/rebase-jayofelony
 docker build -t pwnghost-rebase-jayofelony .
 
 # One run per board -- both share the same base image download/cache.
+# Run sequentially, not in parallel (see resource-limits note above).
 docker run --rm --privileged \
+  --memory=6g --memory-swap=6g --cpus=4 \
   -e BOARD=pi-zero-w \
   -v "$(pwd):/work" \
   pwnghost-rebase-jayofelony bash build.sh
 
 docker run --rm --privileged \
+  --memory=6g --memory-swap=6g --cpus=4 \
   -e BOARD=pi-zero-2w \
   -v "$(pwd):/work" \
   pwnghost-rebase-jayofelony bash build.sh

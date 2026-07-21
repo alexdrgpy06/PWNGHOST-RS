@@ -101,6 +101,14 @@ ENV CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
 ENV CXX_arm_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
 ENV CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
 ENV PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
+# rustc's thin-LTO codegen (crates/../Cargo.toml [profile.release]) merges
+# codegen units at link time -- left at cargo's default (one job per
+# visible CPU), this spiked peak RSS enough to crash the host machine on a
+# real local build even with Docker Desktop's WSL2 VM already capped in
+# .wslconfig (thrashing the VM's swap file froze the whole host rather
+# than cleanly OOM-killing the container). Capping parallelism trades some
+# build wall-clock time for a peak memory footprint that actually fits.
+ENV CARGO_BUILD_JOBS=2
 
 WORKDIR /workspace
 

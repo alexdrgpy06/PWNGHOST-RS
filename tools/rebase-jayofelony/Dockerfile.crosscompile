@@ -70,6 +70,11 @@ ENV CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
 ENV PKG_CONFIG_PATH_arm_unknown_linux_gnueabihf=/usr/lib/arm-linux-gnueabihf/pkgconfig
 ENV PKG_CONFIG_PATH_armv7_unknown_linux_gnueabihf=/usr/lib/arm-linux-gnueabihf/pkgconfig
 ENV PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig
+# See the matching comment in ../../Dockerfile.builder -- unbounded
+# cargo parallelism (this image cross-compiles three targets, each with
+# thin-LTO) is what actually crashed the host machine on a real local
+# build, even with the WSL2 VM already memory-capped in .wslconfig.
+ENV CARGO_BUILD_JOBS=2
 
 WORKDIR /workspace
 COPY . /workspace
