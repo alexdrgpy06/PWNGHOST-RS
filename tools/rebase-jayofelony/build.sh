@@ -144,6 +144,24 @@ WORK_DIR="${WORK_DIR:-/work}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$WORK_DIR/artifacts}"
 OVERLAY_DIR="${OVERLAY_DIR:-$WORK_DIR/overlay}"
 
+# RAW_IMG/BOOT_MNT/ROOT_MNT below are fixed paths under WORK_DIR, not
+# scoped per board/run -- two `build.sh` invocations against the same
+# WORK_DIR (e.g. a manual run and an unrelated automated/agent-driven one
+# kicked off around the same time) will silently race on the same
+# base.img and mount points, and on `losetup -f` picking loop devices
+# from the same shared host kernel table under --privileged. One run's
+# EXIT cleanup trap unmounting things out from under the other's rsync
+# mid-copy reproduces exactly the "overlay files silently missing after
+# rsync" failure this was debugged from -- confirmed as the likely cause,
+# not reproduced with a byte-for-byte-identical single run once nothing
+# else was touching WORK_DIR. Fail fast and loud instead of racing.
+LOCK_FILE="$WORK_DIR/.build.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    echo "build.sh: another build is already running against WORK_DIR=$WORK_DIR (lock: $LOCK_FILE) -- refusing to race it. Wait for it to finish, or use a separate WORK_DIR." >&2
+    exit 1
+fi
+
 # Which jayofelony release to rebase onto. Real hardware testing across
 # several candidates so far (all confirmed to have genuine nexmon --
 # decompressed and grepped the *active* brcmfmac.ko directly, not
@@ -423,14 +441,40 @@ sed -i 's/^dtoverlay=spi1-3cs/#dtoverlay=spi1-3cs/' "$BOOT_MNT/config.txt"
 # pi-gen/stage5/01-runtime-overlay/00-run.sh for the from-scratch build --
 # missed here because this script wasn't written by copying that one.
 rsync -a -K "$OVERLAY_DIR/" "$ROOT_MNT/"
+# ROOT_MNT is a loop-mounted ext4 filesystem living inside base.img, which
+# itself sits on WORK_DIR -- a Docker Desktop bind mount from the Windows
+# host (virtiofs/9p). Confirmed the hard way: files rsync just wrote were
+# verifiably present via a plain `ls` on ROOT_MNT immediately afterward,
+# yet the very next `chroot` below -- a fresh chroot() re-resolving paths
+# from scratch -- got ENOENT for those exact same files. That's a
+# read-after-write visibility gap somewhere in the nested
+# bind-mount/loop-device stack, not a real missing-file bug. `sync`
+# forces the write-back before anything re-resolves paths through this
+# mount, which is cheap here (single-digit MB of overlay data).
+sync "$ROOT_MNT"
 
-chroot "$ROOT_MNT" /bin/bash -euo pipefail -c '
+# The chroot step below reads files this same rsync just wrote. Confirmed
+# by direct diagnosis (stat *inside* a chroot on this exact path returns
+# a valid inode with correct size/mtime, yet the *next* separate chroot()
+# call on the same path gets ENOENT) that this is a transient visibility
+# race somewhere in the nested loop-device-inside-a-Windows-virtiofs-bind-
+# mount stack, not a real missing-file bug and not something this script
+# can fix at the root (candidates: virtiofs metadata caching, WSL2 mount
+# propagation lag, antivirus scanning the loop-backed image file
+# mid-write -- unconfirmed, no way to isolate further from inside the
+# container). The whole block is idempotent (mkdir -p, chmod, and
+# `systemctl enable` on an already-enabled unit are all safe to repeat),
+# so retry it as a unit with a settle delay rather than trying to patch
+# around one specific failure mode blind.
+OVERLAY_INSTALL_ATTEMPTS=5
+for attempt in $(seq 1 "$OVERLAY_INSTALL_ATTEMPTS"); do
+    if chroot "$ROOT_MNT" /bin/bash -euo pipefail -c '
 mkdir -p /etc/pwnghost/conf.d /etc/pwnghost/handshakes /var/log/pwnghost /var/tmp/pwnghost /var/lib/pwnghost /var/tmp/pwnghost/bettercap-output
 chmod +x /usr/bin/monstart /usr/bin/monstop /usr/local/bin/*.sh 2>/dev/null || true
 chmod +x /usr/local/bin/pwnghost-monstart-if-needed 2>/dev/null || true
 chmod +x /lib/systemd/system-shutdown/safe-shutdown.sh 2>/dev/null || true
 # bt-pan-connect/disconnect have no .sh extension, so the *.sh glob above
-# does not cover them -- named explicitly, same as pi-gen's own
+# does not cover them -- named explicitly, matching the from-scratch pi-gen build
 # stage5/01-runtime-overlay/00-run.sh does for the same two files.
 chmod +x /usr/local/bin/bt-pan-connect /usr/local/bin/bt-pan-disconnect 2>/dev/null || true
 # The overlay is bind-mounted in from a Windows/NTFS host, whose file
@@ -471,20 +515,30 @@ chmod 644 /etc/systemd/system/pwnghost-rs.service \
 systemctl enable pwnghost-rs.service bettercap.service wlan_keepalive.service wifi-country.service
 systemctl enable zram-log.service zram-data.service rsync-zram.timer buffer-cleaner.timer bootlog.service safe-shutdown.service 2>/dev/null || true
 # bt-agent.service registers a NoInputNoOutput pairing agent so a phone
-# can pair without a PIN prompt -- ported over from pi-gen's own
+# can pair without a PIN prompt -- ported over from the from-scratch pi-gen build
 # stage5/01-runtime-overlay (which already had this working) since this
-# pipeline's own overlay never carried it, meaning BT pairing/tethering
+# this pipeline overlay never carried it, meaning BT pairing/tethering
 # was silently missing on every rebase-pipeline image despite the base
 # jayofelony image already shipping the bt-agent/bluetoothctl binaries
 # this depends on (confirmed directly by mounting the base image).
 # bt-pan@.service is a template unit started per-device MAC at runtime
 # (systemctl start bt-pan@AA-BB-CC-DD-EE-FF.service -- bt-pan-connect/
 # disconnect expect dashes in the instance name and convert back to
-# colon format internally) -- not enabled here, same as pi-gen's version;
+# colon format internally) -- not enabled here, matching the pi-gen build;
 # bt_tether.lua (crates/lua) is what actually starts/stops it once a
-# phone's MAC is configured.
+# phone is configured.
 systemctl enable bt-agent.service 2>/dev/null || true
-'
+'; then
+        break
+    fi
+    if [ "$attempt" = "$OVERLAY_INSTALL_ATTEMPTS" ]; then
+        echo "build.sh: overlay-install chroot step failed $OVERLAY_INSTALL_ATTEMPTS times in a row -- giving up (see the visibility-race comment above)" >&2
+        exit 1
+    fi
+    echo "build.sh: overlay-install chroot step failed (attempt $attempt/$OVERLAY_INSTALL_ATTEMPTS) -- retrying after a sync+settle delay" >&2
+    sync "$ROOT_MNT"
+    sleep 2
+done
 
 # --- 7. Unmount, fsck, shrink, recompress ---------------------------------
 log "Unmounting for fsck"
