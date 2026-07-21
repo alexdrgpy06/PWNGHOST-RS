@@ -305,17 +305,7 @@ pub struct DisplayDriver {
     initialized: bool,
     backend: Backend,
     has_refreshed_once: bool,
-    partials_since_full: u32,
 }
-
-/// After this many consecutive partial/quick-LUT refreshes, force a full
-/// refresh even if the caller asked for another partial one. Partial mode
-/// only redraws the delta from the panel's internally-tracked previous
-/// frame and never fully cycles every pixel, so long unbroken streaks of
-/// it visibly ghost on real e-ink hardware. This project's own main loop
-/// unconditionally calls `update(true)` on every tick with no periodic
-/// full refresh of its own, so `DisplayDriver` has to enforce this itself.
-const FULL_REFRESH_EVERY: u32 = 50;
 
 impl DisplayDriver {
     pub fn new(config: &DisplayConfig) -> Result<Self> {
@@ -328,7 +318,6 @@ impl DisplayDriver {
                 last_frame: vec![0; bytes],
             }),
             has_refreshed_once: false,
-            partials_since_full: 0,
         })
     }
 
@@ -372,18 +361,18 @@ impl DisplayDriver {
         // Force a full refresh on the very first update after init (the
         // panel has no valid previous-frame baseline yet -- a caller-
         // requested partial here renders incompletely on real hardware,
-        // confirmed the hard way) and every `FULL_REFRESH_EVERY` partial
-        // refreshes thereafter, to bound ghosting. An explicit
-        // `partial=false` from the caller always wins/resets the streak.
-        let force_full =
-            !partial || !self.has_refreshed_once || self.partials_since_full >= FULL_REFRESH_EVERY;
+        // confirmed the hard way). Real pwnagotchi's own EPD drivers
+        // (confirmed directly from a real device's
+        // ui/hw/waveshare2in13_V4.py) do exactly one full `Clear()` at
+        // init and then call `displayPartial()` unconditionally forever
+        // after -- no periodic forced-full cycle at all -- so an earlier
+        // revision's `FULL_REFRESH_EVERY`-style periodic full refresh was
+        // a self-inflicted behavior the original doesn't have, visible on
+        // real hardware as the panel appearing to "reset" every so often.
+        // Removed to match the reference exactly.
+        let force_full = !partial || !self.has_refreshed_once;
         let effective_partial = partial && !force_full;
         self.has_refreshed_once = true;
-        if effective_partial {
-            self.partials_since_full += 1;
-        } else {
-            self.partials_since_full = 0;
-        }
 
         info!(
             "Flushing {} bytes to display (partial={}, requested_partial={})",
@@ -524,45 +513,30 @@ mod tests {
         assert!(!driver.has_refreshed_once);
         driver.update(&[0u8; 10], true).await.unwrap();
         assert!(driver.has_refreshed_once);
-        // The very first refresh must not count towards the partial
-        // streak -- it was forced full regardless of the request.
-        assert_eq!(driver.partials_since_full, 0);
     }
 
     #[cfg(not(feature = "hardware"))]
     #[tokio::test]
-    async fn test_periodic_full_refresh_resets_partial_streak() {
+    async fn test_partial_requests_never_force_full_after_the_first() {
+        // Matches real pwnagotchi's own EPD drivers: after the mandatory
+        // first full refresh, every subsequent `partial=true` update stays
+        // partial forever -- there is no periodic forced-full cycle.
         let config = DisplayConfig::default();
         let mut driver = DisplayDriver::new(&config).unwrap();
         driver.init().await.unwrap();
-        // Consume the mandatory first-refresh-is-full case before
-        // measuring the periodic streak.
-        driver.update(&[0u8; 10], true).await.unwrap();
-        assert_eq!(driver.partials_since_full, 0);
-        for i in 0..FULL_REFRESH_EVERY {
-            driver.update(&[0u8; 10], true).await.unwrap();
-            assert_eq!(driver.partials_since_full, i + 1);
+        for _ in 0..200 {
+            assert!(driver.update(&[0u8; 10], true).await.is_ok());
         }
-        // The next partial-requested update lands on the forced-full
-        // boundary and resets the streak instead of extending it.
-        driver.update(&[0u8; 10], true).await.unwrap();
-        assert_eq!(driver.partials_since_full, 0);
     }
 
     #[cfg(not(feature = "hardware"))]
     #[tokio::test]
-    async fn test_explicit_full_request_resets_partial_streak() {
+    async fn test_explicit_full_request_always_honored() {
         let config = DisplayConfig::default();
         let mut driver = DisplayDriver::new(&config).unwrap();
         driver.init().await.unwrap();
-        // Consume the mandatory first-refresh-is-full case first.
         driver.update(&[0u8; 10], true).await.unwrap();
-        assert_eq!(driver.partials_since_full, 0);
-        driver.update(&[0u8; 10], true).await.unwrap();
-        driver.update(&[0u8; 10], true).await.unwrap();
-        assert_eq!(driver.partials_since_full, 2);
-        driver.update(&[0u8; 10], false).await.unwrap();
-        assert_eq!(driver.partials_since_full, 0);
+        assert!(driver.update(&[0u8; 10], false).await.is_ok());
     }
 
     #[test]

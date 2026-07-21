@@ -11,6 +11,7 @@ use figment::providers::{Env, Format, Serialized, Toml};
 use figment::Figment;
 use std::path::Path;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
 /// Load configuration from file with defaults and conf.d overlay
 pub async fn load_config<P: AsRef<Path>>(path: P) -> Result<PwnConfig> {
@@ -56,10 +57,54 @@ pub async fn load_config<P: AsRef<Path>>(path: P) -> Result<PwnConfig> {
     Ok(cfg)
 }
 
-/// Save configuration to file
+/// Save configuration to file.
+///
+/// Write-temp + fsync + rename, not a direct in-place write. A real SD-
+/// card corruption incident diagnosed this session traced part of its
+/// cascade to a torn ext4 directory-block write under filesystem churn;
+/// a plain `fs::write()` here is exactly that shape of risk on this
+/// project's own highest-churn config write path (every webcfg edit
+/// goes through this). `rename(2)` within the same directory is atomic
+/// on ext4, so a crash or power loss mid-write leaves the previous
+/// config.toml intact instead of truncated/corrupt.
 pub async fn save_config<P: AsRef<Path>>(config: &PwnConfig, path: P) -> Result<()> {
+    let path = path.as_ref();
     let content = toml::to_string_pretty(config)?;
-    fs::write(path, content).await?;
+
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let dir = dir.unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("config.toml");
+    let tmp_path = dir.join(format!(".{file_name}.tmp.{}", std::process::id()));
+
+    let mut tmp_file = fs::File::create(&tmp_path)
+        .await
+        .with_context(|| format!("creating temp config file {tmp_path:?}"))?;
+    if let Err(e) = tmp_file.write_all(content.as_bytes()).await {
+        let _ = fs::remove_file(&tmp_path).await;
+        return Err(e).context("writing temp config file");
+    }
+    if let Err(e) = tmp_file.sync_all().await {
+        let _ = fs::remove_file(&tmp_path).await;
+        return Err(e).context("fsyncing temp config file");
+    }
+    drop(tmp_file);
+
+    fs::rename(&tmp_path, path)
+        .await
+        .with_context(|| format!("renaming {tmp_path:?} to {path:?}"))?;
+
+    // Also fsync the containing directory: rename(2)'s durability itself
+    // isn't guaranteed on ext4 until the directory entry update is
+    // flushed, even though the file's own contents were just fsynced
+    // above -- without this, a crash immediately after rename() can
+    // still lose the rename on power loss.
+    if let Ok(dir_file) = std::fs::File::open(dir) {
+        let _ = dir_file.sync_all();
+    }
+
     Ok(())
 }
 
@@ -75,7 +120,7 @@ pub fn default_config() -> PwnConfig {
 ///
 /// This is how a config-editor save must work: the web UI sends only the
 /// fields the user changed, and unspecified sections (`bettercap`, `fs`,
-/// `oxigotchi`, `plugins`, plugin `api_key`s, ...) must survive rather than
+/// `agent`, `plugins`, plugin `api_key`s, ...) must survive rather than
 /// being reset to defaults. Mirrors real pwnagotchi's `utils.merge_config`
 /// (its webcfg "merge-save" path), which exists for exactly this reason.
 pub fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {

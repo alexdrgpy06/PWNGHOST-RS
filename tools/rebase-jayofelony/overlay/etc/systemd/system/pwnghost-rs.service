@@ -1,8 +1,14 @@
 [Unit]
 Description=PWNGHOST-RS - Rust Pwnagotchi Implementation
 Documentation=https://github.com/pwnghost-rs/pwnghost-rs
-After=network.target
-Wants=network.target
+# Phase 1: capture backend is bettercap (replaces AngryOxide), a separate
+# systemd unit this project doesn't own the process lifecycle of. Ordered
+# after it, but not a hard Requires= -- pwnghost-rs's own bettercap client
+# retries its bootstrap commands with backoff, so it degrades gracefully
+# (recon/capture just won't work yet) rather than failing to start at all
+# if bettercap is slow to come up.
+After=network.target bettercap.service
+Wants=network.target bettercap.service
 # StartLimitIntervalSec=/StartLimitBurst= belong in [Unit], not [Service]
 # -- confirmed by a real systemd warning on hardware ("Unknown key name
 # 'StartLimitIntervalSec' in section 'Service', ignoring") on the
@@ -17,6 +23,17 @@ NotifyAccess=main
 ExecStart=/usr/local/bin/pwnghost-rs --config /etc/pwnghost/config.toml
 Restart=on-failure
 RestartSec=5
+# The app's own main loop calls sd_notify::watchdog() every 15s (see
+# crates/pwnghost-rs/src/main.rs's watchdog_interval), but that call is
+# inert without this: without WatchdogSec=, systemd never arms watchdog
+# tracking at all, so a genuinely hung process (not crashed, just stuck
+# -- e.g. the display's SPI/GPIO BUSY-line poll hanging forever, since
+# that's an unbounded loop with no timeout of its own even after the
+# tokio::time::timeout wrapper added around it in main.rs) would never be
+# noticed or restarted -- it'd just sit there indefinitely. 45s is 3x the
+# app's own 15s notify cadence, tolerating a couple of missed beats from
+# scheduling jitter before treating it as a real hang.
+WatchdogSec=45
 
 # Deliberately NOT sandboxed with ProtectSystem=strict/PrivateTmp=yes/
 # ReadWritePaths= (an earlier revision had all three). None of the
