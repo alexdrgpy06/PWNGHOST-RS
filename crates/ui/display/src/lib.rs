@@ -176,31 +176,10 @@ impl Display {
     }
 }
 
-/// Get face for mood
+/// Get face for mood. Delegates to the canonical table in
+/// [`pwncore::Mood::face`] (single source of truth for faces).
 pub fn face_for_mood(mood: Mood) -> &'static str {
-    match mood {
-        Mood::LookR => "( ⚆_⚆)",
-        Mood::LookL => "(☉_☉ )",
-        Mood::LookRHappy => "( ◕‿◕)",
-        Mood::LookLHappy => "(◕‿◕ )",
-        Mood::Sleep => "(⇀‿‿↼)",
-        Mood::Awake => "(◕‿‿◕)",
-        Mood::Bored => "(-__-)",
-        Mood::Intense => "(°▃▃°)",
-        Mood::Cool => "(⌐■_■)",
-        Mood::Happy => "(•‿‿•)",
-        Mood::Excited => "(ᵔ◡◡ᵔ)",
-        Mood::Grateful => "(^‿‿^)",
-        Mood::Motivated => "(☼‿‿☼)",
-        Mood::Demotivated => "(≖__≖)",
-        Mood::Smart => "(✜‿‿✜)",
-        Mood::Lonely => "(ب__ب)",
-        Mood::Sad => "(╥☁╥ )",
-        Mood::Angry => "(-_-')",
-        Mood::Friend => "(♥‿‿♥)",
-        Mood::Broken => "(☓‿‿☓)",
-        Mood::Upload => "(1__0)",
-    }
+    mood.face()
 }
 
 #[cfg(test)]

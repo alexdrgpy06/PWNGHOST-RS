@@ -8,217 +8,414 @@
   :root {
     color-scheme: dark;
     --accent: #4caf50;
-    --bg: #0b0f0c;
+    --accent-dim: #2f7d33;
+    --bg: #080b09;
+    --bg-2: #0b0f0c;
     --panel: #0f1712;
+    --panel-2: #0c130e;
     --border: #1f3a29;
+    --border-soft: #16281d;
     --text: #b7f7c2;
+    --text-strong: #d7ffdd;
     --dim: #7fa889;
     --danger: #e05a5a;
+    --warn: #d8a13a;
+    --radius: 10px;
+    --shadow: 0 1px 0 rgba(255,255,255,0.02) inset, 0 8px 24px rgba(0,0,0,0.35);
+    --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
+  html, body { max-width: 100%; overflow-x: hidden; }
   body {
-    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-    margin: 0; padding: 1rem; background: var(--bg); color: var(--text);
-    line-height: 1.4;
+    font-family: var(--mono);
+    margin: 0; padding: 0 1rem 2rem; background:
+      radial-gradient(1200px 400px at 50% -200px, rgba(76,175,80,0.06), transparent 70%),
+      var(--bg);
+    color: var(--text); line-height: 1.45; font-size: 14px;
   }
-  h1 { font-size: 1.3rem; letter-spacing: 0.08em; margin: 0; }
-  h2 { font-size: 0.95rem; letter-spacing: 0.06em; margin: 0 0 0.5rem; opacity: 0.85; text-transform: uppercase; }
   a { color: var(--accent); }
+
+  /* ---- Sticky header + tabs ---- */
   header {
+    position: sticky; top: 0; z-index: 20;
+    margin: 0 -1rem 1.25rem; padding: 0.75rem 1rem 0;
+    background: linear-gradient(var(--bg), rgba(8,11,9,0.85));
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .brandrow {
     display: flex; align-items: center; justify-content: space-between;
-    flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;
+    gap: 0.75rem; flex-wrap: wrap;
   }
-  .conn { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; opacity: 0.8; }
-  .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--danger); flex: none; }
-  .dot.ok { background: var(--accent); }
-  .dot.pending { background: #d8a13a; }
+  h1 {
+    font-size: 1.05rem; letter-spacing: 0.14em; margin: 0; color: var(--text-strong);
+    text-shadow: 0 0 12px rgba(76,175,80,0.25);
+  }
+  h1 .sub { color: var(--dim); letter-spacing: 0.06em; font-weight: normal; }
+  .conn { display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; color: var(--dim); }
+  .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--danger); flex: none; box-shadow: 0 0 8px currentColor; color: var(--danger); }
+  .dot.ok { background: var(--accent); color: var(--accent); }
+  .dot.pending { background: var(--warn); color: var(--warn); }
 
-  .top {
-    display: flex; gap: 1.25rem; align-items: center; flex-wrap: wrap;
-    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-    padding: 1rem 1.25rem; margin-bottom: 1rem;
+  nav.tabs { display: flex; gap: 0.25rem; margin-top: 0.6rem; overflow-x: auto; }
+  nav.tabs button {
+    font-family: inherit; font-size: 0.78rem; letter-spacing: 0.04em;
+    background: transparent; color: var(--dim); border: none;
+    border-bottom: 2px solid transparent; padding: 0.5rem 0.85rem; cursor: pointer;
+    white-space: nowrap; text-transform: uppercase;
   }
-  .face { font-size: 2.75rem; line-height: 1; }
-  .moodblock .mood { font-size: 1.1rem; font-weight: bold; }
-  .moodblock .name { opacity: 0.6; font-size: 0.75rem; }
+  nav.tabs button:hover { color: var(--text); }
+  nav.tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
 
-  .grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 0.6rem; margin-bottom: 1.25rem;
-  }
-  .card {
-    border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.85rem; background: var(--panel);
-  }
-  .k { opacity: 0.6; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
-  .v { font-size: 1.15rem; }
+  main { max-width: 1100px; margin: 0 auto; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; animation: fade 0.18s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
+  h2 { font-size: 0.82rem; letter-spacing: 0.08em; margin: 0; color: var(--dim); text-transform: uppercase; }
   section {
-    border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
-    padding: 0.85rem 1rem; margin-bottom: 1rem;
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel);
+    padding: 0.9rem 1.05rem; margin-bottom: 1rem; box-shadow: var(--shadow);
   }
-  .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
-  button {
+  .section-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.7rem; }
+
+  button.btn {
     font-family: inherit; background: transparent; color: var(--text);
-    border: 1px solid var(--border); border-radius: 6px; padding: 0.25rem 0.6rem;
-    font-size: 0.7rem; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem 0.7rem;
+    font-size: 0.72rem; cursor: pointer; transition: border-color .15s, color .15s, background .15s;
   }
-  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.btn:hover { border-color: var(--accent); color: var(--accent); }
+  button.btn.primary { border-color: var(--accent-dim); color: var(--text-strong); background: rgba(76,175,80,0.08); }
+  button.btn.primary:hover { background: rgba(76,175,80,0.16); border-color: var(--accent); }
 
-  table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
-  th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
-  th { opacity: 0.6; font-weight: normal; text-transform: uppercase; font-size: 0.65rem; }
-  .scroll-x { overflow-x: auto; }
-  .empty { opacity: 0.5; font-size: 0.8rem; padding: 0.5rem 0; }
-  tr.fresh td { color: var(--accent); }
-
-  .cfg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; }
-  .cfg-group .k { display: block; margin-top: 0.35rem; }
-  .cfg-group .k:first-child { margin-top: 0; }
-  .cfg-group .v { font-size: 0.85rem; word-break: break-all; }
-  details { margin-top: 0.75rem; }
-  summary { cursor: pointer; font-size: 0.75rem; opacity: 0.7; }
-  pre {
-    background: #060907; border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.6rem; font-size: 0.7rem; overflow-x: auto; max-height: 320px;
+  /* ---- Dashboard ---- */
+  .hero {
+    display: grid; grid-template-columns: 1fr; gap: 1rem; margin-bottom: 1rem;
   }
-  footer { opacity: 0.4; font-size: 0.7rem; margin-top: 1rem; text-align: center; }
-
-  .activity-log {
-    max-height: 220px; overflow-y: auto; font-size: 0.75rem;
-    background: #060907; border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.6rem;
-  }
-  .activity-line { display: flex; gap: 0.5rem; padding: 0.1rem 0; white-space: nowrap; }
-  .activity-line .lvl { flex: none; width: 4.5rem; opacity: 0.7; text-transform: uppercase; font-size: 0.65rem; }
-  .activity-line .msg { opacity: 0.9; }
-  .activity-line.err .lvl, .activity-line.err .msg { color: var(--danger); }
-  .activity-line.warn .lvl, .activity-line.warn .msg { color: #d8a13a; }
-  .activity-line.priority .lvl { color: var(--accent); }
-
+  @media (min-width: 760px) { .hero { grid-template-columns: 1.1fr 0.9fr; } }
   .live { text-align: center; }
   .eink {
-    display: block; margin: 0.25rem auto 0; width: 100%; max-width: 500px;
-    image-rendering: pixelated; background: #fff; border: 1px solid var(--border);
-    border-radius: 6px; aspect-ratio: 250 / 122;
+    display: block; margin: 0.4rem auto 0; width: 100%; max-width: 500px;
+    image-rendering: pixelated; background: #eafff0; border: 1px solid var(--border);
+    border-radius: 8px; aspect-ratio: 250 / 122;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 10px 30px rgba(0,0,0,0.4);
+  }
+  .facecard { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  .face { font-size: 3rem; line-height: 1; color: var(--text-strong); text-shadow: 0 0 18px rgba(76,175,80,0.3); }
+  .mood { font-size: 1.15rem; font-weight: bold; margin-top: 0.4rem; color: var(--text-strong); }
+  .mood-label { color: var(--dim); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; }
+
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 0.55rem; margin-bottom: 1rem;
+  }
+  .card {
+    border: 1px solid var(--border-soft); border-radius: 8px; padding: 0.55rem 0.8rem;
+    background: linear-gradient(var(--panel), var(--panel-2));
+  }
+  .k { color: var(--dim); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .v { font-size: 1.15rem; color: var(--text-strong); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+  th, td { text-align: left; padding: 0.4rem 0.55rem; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
+  th { color: var(--dim); font-weight: normal; text-transform: uppercase; font-size: 0.62rem; letter-spacing: 0.05em; }
+  tr.fresh td { color: var(--accent); }
+  .scroll-x { overflow-x: auto; }
+  .empty { color: var(--dim); opacity: 0.8; font-size: 0.8rem; padding: 0.5rem 0; }
+  .cols { display: grid; grid-template-columns: 1fr; gap: 1rem; align-items: start; }
+  @media (min-width: 760px) { .cols { grid-template-columns: 1fr 1fr; } }
+
+  .activity-log {
+    max-height: 240px; overflow-y: auto; font-size: 0.74rem;
+    background: #050806; border: 1px solid var(--border-soft); border-radius: 8px; padding: 0.5rem 0.6rem;
+  }
+  .activity-line { display: flex; gap: 0.6rem; padding: 0.12rem 0; white-space: nowrap; }
+  .activity-line .lvl { flex: none; width: 4.5rem; color: var(--dim); font-size: 0.66rem; }
+  .activity-line .msg { color: var(--text); }
+  .activity-line.err .msg, .activity-line.err .lvl { color: var(--danger); }
+  .activity-line.warn .msg, .activity-line.warn .lvl { color: var(--warn); }
+  .activity-line.priority .lvl { color: var(--accent); }
+
+  /* ---- Toggle switch ---- */
+  .switch { position: relative; display: inline-block; width: 40px; height: 22px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; inset: 0; cursor: pointer; background: #1a2a20;
+    border: 1px solid var(--border); border-radius: 22px; transition: .18s;
+  }
+  .slider::before {
+    content: ""; position: absolute; height: 14px; width: 14px; left: 3px; top: 3px;
+    background: var(--dim); border-radius: 50%; transition: .18s;
+  }
+  .switch input:checked + .slider { background: rgba(76,175,80,0.25); border-color: var(--accent-dim); }
+  .switch input:checked + .slider::before { transform: translateX(18px); background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .switch input:disabled + .slider { opacity: 0.5; cursor: default; }
+
+  /* ---- Config forms ---- */
+  .cfg-section { margin-bottom: 0.6rem; border: 1px solid var(--border-soft); border-radius: 8px; overflow: hidden; }
+  .cfg-section > summary {
+    cursor: pointer; padding: 0.6rem 0.85rem; background: var(--panel-2);
+    font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-strong);
+    list-style: none; display: flex; align-items: center; justify-content: space-between;
+  }
+  .cfg-section > summary::-webkit-details-marker { display: none; }
+  .cfg-section > summary::after { content: "▸"; color: var(--dim); transition: .15s; }
+  .cfg-section[open] > summary::after { transform: rotate(90deg); }
+  .cfg-body { padding: 0.7rem 0.85rem; display: grid; grid-template-columns: 1fr; gap: 0.5rem; }
+  @media (min-width: 620px) { .cfg-body { grid-template-columns: 1fr 1fr; } }
+  .field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+  .field.nested { grid-column: 1 / -1; border-left: 2px solid var(--border-soft); padding-left: 0.7rem; margin-left: 0.1rem; }
+  .field.bool { flex-direction: row; align-items: center; justify-content: space-between; gap: 0.6rem; }
+  .field label { font-size: 0.72rem; color: var(--dim); }
+  .field .path { color: var(--border); font-size: 0.6rem; }
+  .field input[type=text], .field input[type=number], .field select {
+    font-family: inherit; font-size: 0.78rem; background: #050806; color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.35rem 0.5rem; width: 100%; min-width: 0;
+  }
+  .field input:focus, .field select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(76,175,80,0.15); }
+  .nested-title { grid-column: 1 / -1; color: var(--dim); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 0.2rem; }
+
+  .save-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.4rem; flex-wrap: wrap; }
+  #cfg-status, #plugins-status { font-size: 0.72rem; color: var(--dim); }
+  #cfg-status.ok, #plugins-status.ok { color: var(--accent); }
+  #cfg-status.err, #plugins-status.err { color: var(--danger); }
+  details.advanced { margin-top: 0.8rem; }
+  details.advanced summary { cursor: pointer; font-size: 0.72rem; color: var(--dim); }
+  textarea#cfg-raw {
+    display: block; width: 100%; height: 300px; margin-top: 0.5rem;
+    background: #050806; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.6rem; font-family: inherit; font-size: 0.72rem;
+    resize: vertical; white-space: pre; overflow: auto;
   }
 
-  @media (min-width: 720px) {
-    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
+  /* ---- Plugins ---- */
+  .plugin-item { border-bottom: 1px solid var(--border-soft); }
+  .plugin-item:last-child { border-bottom: none; }
+  .plugin-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+    padding: 0.6rem 0.2rem;
   }
+  .plugin-meta { min-width: 0; }
+  .plugin-name { color: var(--text-strong); font-size: 0.85rem; }
+  .plugin-desc { color: var(--dim); font-size: 0.7rem; white-space: normal; }
+  .badge { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); border: 1px solid var(--border-soft); border-radius: 4px; padding: 0.05rem 0.3rem; margin-left: 0.4rem; }
+  .note { color: var(--dim); font-size: 0.72rem; margin-bottom: 0.6rem; }
+  .plugin-actions { display: flex; align-items: center; gap: 0.6rem; flex: none; }
+  .plugin-opts-panel {
+    display: none; padding: 0.2rem 0.2rem 0.8rem; grid-template-columns: 1fr; gap: 0.5rem;
+  }
+  .plugin-opts-panel.open { display: grid; }
+  @media (min-width: 620px) { .plugin-opts-panel { grid-template-columns: 1fr 1fr; } }
+  .plugin-opts-panel .save-row { grid-column: 1 / -1; margin-top: 0; }
+
+  .src-pill { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.08rem 0.4rem; border-radius: 999px; border: 1px solid var(--border); }
+  .src-local { color: var(--accent); border-color: var(--accent-dim); }
+  .src-wpasec { color: #6fb7ff; border-color: #24507a; }
+
+  footer { max-width: 1100px; margin: 1.5rem auto 0; color: var(--dim); opacity: 0.7; font-size: 0.7rem; text-align: center; }
 </style>
 </head>
 <body>
   <header>
-    <h1 id="agent-name">PWNGHOST-RS</h1>
-    <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></div>
+    <div class="brandrow">
+      <h1>PWNGHOST<span class="sub">-RS</span> <span class="sub" id="agent-name"></span></h1>
+      <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="dashboard" class="active">Dashboard</button>
+      <button data-tab="config">Config</button>
+      <button data-tab="plugins">Plugins</button>
+      <button data-tab="cracked">Cracked</button>
+    </nav>
   </header>
 
-  <section class="live">
-    <div class="section-head"><h2>Live display</h2><span class="k" id="live-hint">the actual e-ink frame</span></div>
-    <img id="ui" class="eink" alt="live display" />
-  </section>
-
-  <div class="top">
-    <div class="face" id="face">—</div>
-    <div class="moodblock">
-      <div class="mood" id="mood">—</div>
-      <div class="name">mood</div>
-    </div>
-  </div>
-
-  <div class="grid">
-    <div class="card"><div class="k">Channel</div><div class="v" id="channel">—</div></div>
-    <div class="card"><div class="k">APs</div><div class="v" id="aps">—</div></div>
-    <div class="card"><div class="k">Handshakes</div><div class="v" id="handshakes">—</div></div>
-    <div class="card"><div class="k">Level</div><div class="v" id="level">—</div></div>
-    <div class="card"><div class="k">XP</div><div class="v" id="xp">—</div></div>
-    <div class="card"><div class="k">Peers</div><div class="v" id="peers-count">—</div></div>
-    <div class="card"><div class="k">Uptime</div><div class="v" id="uptime">—</div></div>
-    <div class="card"><div class="k">Epoch</div><div class="v" id="epoch">—</div></div>
-    <div class="card"><div class="k">CPU Temp</div><div class="v" id="cpu-temp">—</div></div>
-    <div class="card"><div class="k">RAM</div><div class="v" id="ram">—</div></div>
-    <div class="card"><div class="k">Battery</div><div class="v" id="battery">—</div></div>
-  </div>
-
-  <section>
-    <div class="section-head">
-      <h2>Live activity (AngryOxide)</h2>
-      <span class="k" id="activity-hint">waiting for AngryOxide…</span>
-    </div>
-    <div class="scroll-x">
-      <div id="activity-log" class="activity-log"></div>
-    </div>
-    <div class="empty" id="activity-empty">No activity yet — waiting for AngryOxide to report in.</div>
-  </section>
-
-  <div class="cols">
-    <section>
-      <div class="section-head"><h2>Peers</h2><button id="peers-refresh">refresh</button></div>
-      <div class="scroll-x">
-        <table>
-          <thead><tr><th>Name</th><th>MAC</th><th>Ch</th><th>Mood</th><th>Lvl</th><th>Signal</th><th>HS shared</th><th>Last seen</th></tr></thead>
-          <tbody id="peers-body"></tbody>
-        </table>
+  <main>
+    <!-- ============ DASHBOARD ============ -->
+    <div class="tab-panel active" id="tab-dashboard">
+      <div class="hero">
+        <section class="live">
+          <div class="section-head"><h2>Live display</h2><span class="k" id="live-hint">the actual e-ink frame</span></div>
+          <img id="ui" class="eink" alt="live display" />
+        </section>
+        <section class="facecard">
+          <div class="face" id="face">—</div>
+          <div class="mood" id="mood">—</div>
+          <div class="mood-label">current mood</div>
+        </section>
       </div>
-      <div class="empty" id="peers-empty">No peers seen yet.</div>
-    </section>
 
-    <section>
-      <div class="section-head"><h2>Handshakes</h2><button id="hs-refresh">refresh</button></div>
-      <div class="scroll-x">
-        <table>
-          <thead><tr><th>Time</th><th>SSID</th><th>BSSID</th><th>Ch</th><th>Type</th></tr></thead>
-          <tbody id="hs-body"></tbody>
-        </table>
+      <div class="grid">
+        <div class="card"><div class="k">Channel</div><div class="v" id="channel">—</div></div>
+        <div class="card"><div class="k">APs</div><div class="v" id="aps">—</div></div>
+        <div class="card"><div class="k">Handshakes</div><div class="v" id="handshakes">—</div></div>
+        <div class="card"><div class="k">Level</div><div class="v" id="level">—</div></div>
+        <div class="card"><div class="k">XP</div><div class="v" id="xp">—</div></div>
+        <div class="card"><div class="k">Peers</div><div class="v" id="peers-count">—</div></div>
+        <div class="card"><div class="k">Uptime</div><div class="v" id="uptime">—</div></div>
+        <div class="card"><div class="k">Epoch</div><div class="v" id="epoch">—</div></div>
+        <div class="card"><div class="k">CPU Temp</div><div class="v" id="cpu-temp">—</div></div>
+        <div class="card"><div class="k">RAM</div><div class="v" id="ram">—</div></div>
+        <div class="card"><div class="k">Battery</div><div class="v" id="battery">—</div></div>
       </div>
-      <div class="empty" id="hs-empty">No handshakes captured yet.</div>
-    </section>
-  </div>
 
-  <section>
-    <div class="section-head"><h2>Config</h2><button id="cfg-refresh">refresh</button></div>
-    <div class="cfg-grid">
-      <div class="cfg-group">
-        <span class="k">Name</span><span class="v" id="cfg-name">—</span>
-        <span class="k">Interface</span><span class="v" id="cfg-iface">—</span>
-        <span class="k">Language</span><span class="v" id="cfg-lang">—</span>
-        <span class="k">Whitelist</span><span class="v" id="cfg-whitelist">—</span>
-      </div>
-      <div class="cfg-group">
-        <span class="k">Web UI</span><span class="v" id="cfg-web">—</span>
-        <span class="k">Display</span><span class="v" id="cfg-display">—</span>
-      </div>
-      <div class="cfg-group">
-        <span class="k">Deauth / Associate</span><span class="v" id="cfg-attack">—</span>
-        <span class="k">Recon time (min/max/hop)</span><span class="v" id="cfg-recon">—</span>
-        <span class="k">Rewards (handshake/new-ap/assoc)</span><span class="v" id="cfg-rewards">—</span>
-        <span class="k">Mood thresholds (bored/sad/angry/lonely)</span><span class="v" id="cfg-thresholds">—</span>
+      <section>
+        <div class="section-head"><h2>Live activity</h2><span class="k" id="activity-hint">waiting for activity…</span></div>
+        <div class="scroll-x"><div id="activity-log" class="activity-log"></div></div>
+        <div class="empty" id="activity-empty">No activity yet — waiting for the agent to report in.</div>
+      </section>
+
+      <div class="cols">
+        <section>
+          <div class="section-head"><h2>Peers</h2><button class="btn" id="peers-refresh">refresh</button></div>
+          <div class="scroll-x"><table>
+            <thead><tr><th>Name</th><th>MAC</th><th>Ch</th><th>Mood</th><th>Lvl</th><th>Signal</th><th>HS</th><th>Seen</th></tr></thead>
+            <tbody id="peers-body"></tbody>
+          </table></div>
+          <div class="empty" id="peers-empty">No peers seen yet.</div>
+        </section>
+        <section>
+          <div class="section-head"><h2>Handshakes</h2><button class="btn" id="hs-refresh">refresh</button></div>
+          <div class="scroll-x"><table>
+            <thead><tr><th>Time</th><th>SSID</th><th>BSSID</th><th>Ch</th><th>Type</th></tr></thead>
+            <tbody id="hs-body"></tbody>
+          </table></div>
+          <div class="empty" id="hs-empty">No handshakes captured yet.</div>
+        </section>
       </div>
     </div>
-    <details>
-      <summary>raw config JSON</summary>
-      <pre id="cfg-raw">—</pre>
-    </details>
-  </section>
+
+    <!-- ============ CONFIG ============ -->
+    <div class="tab-panel" id="tab-config">
+      <section>
+        <div class="section-head">
+          <h2>Configuration</h2>
+          <div style="display:flex; gap:0.5rem;">
+            <button class="btn" id="cfg-refresh">reload</button>
+            <button class="btn primary" id="cfg-save">save</button>
+          </div>
+        </div>
+        <p class="note">
+          Edits are deep-merged onto the running config (untouched keys are left
+          alone) and validated before being written to disk — an out-of-range
+          value (e.g. a bad port, min&gt;max recon time) is rejected below and
+          never saved. Plugin enable/disable lives on the <b>Plugins</b> tab.
+        </p>
+        <div id="cfg-forms"></div>
+        <div class="save-row">
+          <button class="btn primary" id="cfg-save-2">save changes</button>
+          <button class="btn" id="cfg-revert">revert</button>
+          <span id="cfg-status"></span>
+        </div>
+        <details class="advanced">
+          <summary>advanced: edit raw JSON</summary>
+          <textarea id="cfg-raw" spellcheck="false"></textarea>
+          <div class="save-row"><button class="btn" id="cfg-save-raw">save raw JSON</button></div>
+        </details>
+      </section>
+    </div>
+
+    <!-- ============ PLUGINS ============ -->
+    <div class="tab-panel" id="tab-plugins">
+      <section>
+        <div class="section-head"><h2>Plugins</h2><button class="btn" id="plugins-refresh">refresh</button></div>
+        <p class="note">
+          Toggling a plugin writes its <code>enabled</code> flag and takes
+          effect on the next restart (plugins are loaded once at startup).
+          <span id="plugins-status"></span>
+        </p>
+        <div id="plugins-list"></div>
+      </section>
+    </div>
+
+    <!-- ============ CRACKED ============ -->
+    <div class="tab-panel" id="tab-cracked">
+      <section>
+        <div class="section-head"><h2>Cracked passwords</h2><button class="btn" id="cracked-refresh">refresh</button></div>
+        <p class="note">
+          Combines on-device hashcat results (<code>pwncrack</code>) and the
+          remote <code>wpa-sec</code> potfile, deduped by BSSID. A network
+          shown by both is listed once, labelled with each source.
+        </p>
+        <div class="scroll-x"><table>
+          <thead><tr><th>SSID</th><th>BSSID</th><th>Password</th><th>Source</th><th>Details</th><th>When</th></tr></thead>
+          <tbody id="cracked-body"></tbody>
+        </table></div>
+        <div class="empty" id="cracked-empty">Nothing cracked yet — needs pwncrack (hashcat + wordlist) or a configured wpa-sec api_key.</div>
+      </section>
+    </div>
+  </main>
 
   <footer>PWNGHOST-RS — live via WebSocket, falls back to polling if disconnected.</footer>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const set = (id, v) => { const e = $(id); if (e) e.textContent = (v === null || v === undefined || v === '') ? '—' : v; };
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+// Short human descriptions for the built-in plugins (display only).
+const PLUGIN_DESC = {
+  auto_tune: "Logs a recon/attack timing signal (diagnostic).",
+  auto_backup: "Periodically backs up handshakes/config.",
+  auto_update: "Checks for and applies updates.",
+  bt_tether: "Bluetooth PAN tethering to a phone.",
+  cache: "De-dupes repeat handshakes per BSSID.",
+  fix_services: "Restarts wedged services (self-heal).",
+  gpio_buttons: "Reads GPIO buttons via gpioget.",
+  gps: "Attaches gpsd fixes to handshakes (wardriving).",
+  grid: "Announces this unit to the mesh/grid.",
+  logtail: "Tails the journal for the activity feed.",
+  memtemp: "Shows RAM/CPU-temperature on the display.",
+  ohcapi: "Uploads hashes to OnlineHashCrack.",
+  pisugarx: "PiSugar battery/UPS readouts.",
+  pwncrack: "On-device hashcat cracking of handshakes.",
+  session_stats: "Persists per-session statistics.",
+  ups_lite: "UPS-Lite battery readouts.",
+  webcfg: "Web config bridge.",
+  wigle: "Uploads observations to WiGLE.",
+  wpa_sec: "Uploads handshakes + downloads cracked potfile from wpa-sec.",
+  pwnstore_ui: "Plugin store UI.",
+  webgpsmap: "Map of handshake GPS locations.",
+};
+
+// Known per-plugin option keys (what each Lua plugin actually reads from
+// `[plugins.<name>]` -- see the plugin source for the read_config_value
+// calls this mirrors). Plugins not listed here have no known options; a
+// plugin listed here still only shows the panel if it has options to edit.
+const PLUGIN_OPTIONS = {
+  wpa_sec: [
+    { key: 'api_key', label: 'API key', secret: true },
+    { key: 'api_url', label: 'API URL', placeholder: 'https://wpa-sec.stanev.org/' },
+  ],
+  pwncrack: [
+    { key: 'wordlist', label: 'Wordlist path', placeholder: '/usr/share/wordlists/rockyou.txt' },
+  ],
+  grid: [
+    { key: 'api_url', label: 'Grid API URL', placeholder: 'https://api.opwngrid.com/api/v1/report' },
+    { key: 'report_interval', label: 'Report interval (s)', number: true },
+  ],
+  wigle: [
+    { key: 'api_key', label: 'API key', secret: true },
+  ],
+  ohcapi: [
+    { key: 'api_key', label: 'API key', secret: true },
+    { key: 'receive_email', label: 'Receive email on crack' },
+  ],
+  bt_tether: [
+    { key: 'mac', label: 'Phone Bluetooth MAC', placeholder: 'AA:BB:CC:DD:EE:FF' },
+    { key: 'check_interval', label: 'Check interval (s)', number: true },
+  ],
+};
 
 function fmtDuration(secs) {
   if (secs === null || secs === undefined) return '—';
   secs = Math.floor(secs);
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
-
 function fmtAgo(unixSecs) {
-  if (unixSecs === null || unixSecs === undefined) return '—';
+  if (!unixSecs) return '—';
   const diff = Math.floor(Date.now() / 1000 - unixSecs);
   if (diff < 5) return 'just now';
   if (diff < 60) return `${diff}s ago`;
@@ -227,248 +424,368 @@ function fmtAgo(unixSecs) {
   return new Date(unixSecs * 1000).toLocaleString();
 }
 
-function applySession(d) {
-  set('mood', d.mood);
-  set('face', d.face);
-  set('channel', d.channel);
-  set('aps', d.aps);
-  set('handshakes', d.handshakes);
-  set('level', d.level);
-  set('xp', d.xp);
-  set('peers-count', d.peers);
-  set('uptime', fmtDuration(d.uptime));
-  set('epoch', d.epoch);
-  if (typeof d.peers === 'number' && d.peers !== lastPeerCount) {
-    lastPeerCount = d.peers;
-    loadPeers();
-  }
+/* ---------- Tabs ---------- */
+const loadedTabs = {};
+function showTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  if (name === 'config' && !loadedTabs.config) { loadConfig(); loadedTabs.config = true; }
+  if (name === 'plugins' && !loadedTabs.plugins) { loadPlugins(); loadedTabs.plugins = true; }
+  if (name === 'cracked' && !loadedTabs.cracked) { loadCracked(); loadedTabs.cracked = true; }
 }
+$('tabs').addEventListener('click', (e) => { if (e.target.dataset.tab) showTab(e.target.dataset.tab); });
 
-function applyStatusExtras(d) {
-  set('cpu-temp', d.cpu_temp !== null && d.cpu_temp !== undefined ? `${d.cpu_temp.toFixed(1)}°C` : '—');
-  set('ram', (d.ram_total || 0) > 0 ? `${d.ram_used}MB / ${d.ram_total}MB` : '—');
-  set('battery', d.battery !== null && d.battery !== undefined ? `${d.battery}%${d.charging ? ' ⚡' : ''}` : '—');
-}
-
+/* ---------- Dashboard data ---------- */
 let lastPeerCount = null;
-
+function applySession(d) {
+  set('mood', d.mood); set('face', d.face); set('channel', d.channel);
+  set('aps', d.aps); set('handshakes', d.handshakes); set('level', d.level);
+  set('xp', d.xp); set('peers-count', d.peers); set('uptime', fmtDuration(d.uptime)); set('epoch', d.epoch);
+  if (typeof d.peers === 'number' && d.peers !== lastPeerCount) { lastPeerCount = d.peers; loadPeers(); }
+}
+function applyStatusExtras(d) {
+  set('cpu-temp', (d.cpu_temp != null) ? `${d.cpu_temp.toFixed(1)}°C` : '—');
+  set('ram', (d.ram_total || 0) > 0 ? `${d.ram_used}MB / ${d.ram_total}MB` : '—');
+  set('battery', (d.battery != null) ? `${d.battery}%${d.charging ? ' ⚡' : ''}` : '—');
+}
 function renderPeers(list) {
-  const body = $('peers-body');
-  const empty = $('peers-empty');
-  body.innerHTML = '';
-  if (!list || list.length === 0) {
-    empty.style.display = 'block';
+  const body = $('peers-body'); body.innerHTML = '';
+  $('peers-empty').style.display = (!list || !list.length) ? 'block' : 'none';
+  (list || []).slice().sort((a, b) => b.signal - a.signal).forEach(p => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(p.name) || '—'}</td><td>${p.mac}</td><td>${p.channel}</td><td>${p.mood}</td><td>${p.level}</td><td>${p.signal} dBm</td><td>${p.handshakes_shared}</td><td>${fmtAgo(p.last_seen)}</td>`;
+    body.appendChild(tr);
+  });
+}
+function addHandshakeRow(h, fresh) {
+  $('hs-empty').style.display = 'none';
+  const body = $('hs-body');
+  const tr = document.createElement('tr');
+  if (fresh) tr.className = 'fresh';
+  const time = h.captured_at ? fmtAgo(h.captured_at) : 'just now';
+  tr.innerHTML = `<td>${time}</td><td>${escapeHtml(h.ssid) || '(hidden)'}</td><td>${h.bssid}</td><td>${h.channel}</td><td>${h.handshake_type}</td>`;
+  body.insertBefore(tr, body.firstChild);
+}
+function renderHandshakes(list) {
+  const body = $('hs-body'); body.innerHTML = '';
+  $('hs-empty').style.display = (!list || !list.length) ? 'block' : 'none';
+  (list || []).slice().sort((a, b) => b.captured_at - a.captured_at).forEach(h => addHandshakeRow(h, false));
+}
+
+const ACTIVITY_MAX = 200;
+function addActivityLine(level, message) {
+  $('activity-empty').style.display = 'none';
+  $('activity-hint').textContent = 'live';
+  const log = $('activity-log');
+  const line = document.createElement('div');
+  const cls = (level || '').toLowerCase();
+  line.className = 'activity-line' + (cls === 'error' ? ' err' : cls === 'warning' ? ' warn' : cls === 'priority' ? ' priority' : '');
+  line.innerHTML = `<span class="lvl">${new Date().toLocaleTimeString()}</span><span class="msg">${escapeHtml(message)}</span>`;
+  log.appendChild(line);
+  while (log.children.length > ACTIVITY_MAX) log.removeChild(log.firstChild);
+  log.scrollTop = log.scrollHeight;
+}
+
+/* ---------- Config: structured forms ---------- */
+let lastConfig = null;
+const CFG_SKIP = new Set(['plugins']); // plugins managed on their own tab
+
+function titleCase(s) { return s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()); }
+
+// Render a value into the container, tagging inputs with data-path + data-vtype
+// so the object can be reconstructed on save with the original JS types.
+function renderValue(container, path, key, value) {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const title = document.createElement('div');
+    title.className = 'nested-title'; title.textContent = titleCase(key);
+    container.appendChild(title);
+    const nested = document.createElement('div');
+    nested.className = 'field nested';
+    const inner = document.createElement('div');
+    inner.className = 'cfg-body'; inner.style.padding = '0';
+    for (const k of Object.keys(value)) renderValue(inner, path + '.' + k, k, value[k]);
+    nested.appendChild(inner); container.appendChild(nested);
     return;
   }
-  empty.style.display = 'none';
-  list.slice().sort((a, b) => b.signal - a.signal).forEach((p) => {
+  const field = document.createElement('div');
+  if (typeof value === 'boolean') {
+    field.className = 'field bool';
+    field.innerHTML = `<label>${titleCase(key)}</label>`;
+    const sw = document.createElement('label'); sw.className = 'switch';
+    const inp = document.createElement('input'); inp.type = 'checkbox'; inp.checked = value;
+    inp.dataset.path = path; inp.dataset.vtype = 'bool';
+    const sl = document.createElement('span'); sl.className = 'slider';
+    sw.appendChild(inp); sw.appendChild(sl); field.appendChild(sw);
+  } else {
+    field.className = 'field';
+    const lab = document.createElement('label'); lab.textContent = titleCase(key); field.appendChild(lab);
+    const inp = document.createElement('input');
+    inp.dataset.path = path;
+    if (typeof value === 'number') {
+      inp.type = 'number';
+      inp.dataset.vtype = Number.isInteger(value) ? 'int' : 'float';
+      if (!Number.isInteger(value)) inp.step = 'any';
+      inp.value = value;
+    } else if (Array.isArray(value)) {
+      inp.type = 'text';
+      inp.dataset.vtype = value.every(x => typeof x === 'number') ? 'array-num' : 'array-str';
+      inp.value = value.join(', ');
+      lab.textContent += '  (comma-separated)';
+    } else {
+      inp.type = 'text'; inp.dataset.vtype = 'string';
+      inp.value = value == null ? '' : value;
+    }
+    field.appendChild(inp);
+  }
+  container.appendChild(field);
+}
+
+function renderConfigForms(c) {
+  const root = $('cfg-forms'); root.innerHTML = '';
+  const keys = Object.keys(c).filter(k => !CFG_SKIP.has(k));
+  // Put the most-edited sections first.
+  const order = ['main', 'personality', 'ui', 'bettercap'];
+  keys.sort((a, b) => {
+    const ia = order.indexOf(a), ib = order.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+  });
+  for (const k of keys) {
+    const det = document.createElement('details'); det.className = 'cfg-section';
+    if (k === 'main' || k === 'personality') det.open = true;
+    const sum = document.createElement('summary'); sum.textContent = titleCase(k); det.appendChild(sum);
+    const body = document.createElement('div'); body.className = 'cfg-body';
+    const v = c[k];
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      for (const kk of Object.keys(v)) renderValue(body, k + '.' + kk, kk, v[kk]);
+    } else {
+      renderValue(body, k, k, v);
+    }
+    det.appendChild(body); root.appendChild(det);
+  }
+}
+
+// Reconstruct a nested object from all inputs' data-path + data-vtype.
+function collectConfigPatch() {
+  const patch = {};
+  document.querySelectorAll('#cfg-forms [data-path]').forEach(inp => {
+    const t = inp.dataset.vtype;
+    let val;
+    if (t === 'bool') val = inp.checked;
+    else if (t === 'int') { const n = parseInt(inp.value, 10); val = Number.isNaN(n) ? 0 : n; }
+    else if (t === 'float') { const n = parseFloat(inp.value); val = Number.isNaN(n) ? 0 : n; }
+    else if (t === 'array-str') val = inp.value.split(',').map(s => s.trim()).filter(s => s.length);
+    else if (t === 'array-num') val = inp.value.split(',').map(s => s.trim()).filter(s => s.length).map(Number);
+    else val = inp.value;
+    const parts = inp.dataset.path.split('.');
+    let node = patch;
+    for (let i = 0; i < parts.length - 1; i++) { node[parts[i]] = node[parts[i]] || {}; node = node[parts[i]]; }
+    node[parts[parts.length - 1]] = val;
+  });
+  return patch;
+}
+
+function renderConfig(c) {
+  lastConfig = c;
+  set('agent-name', c.main && c.main.name ? '· ' + c.main.name : '');
+  if (c.ui && c.ui.web && c.ui.web.theme) {
+    const t = c.ui.web.theme;
+    document.documentElement.style.setProperty('--accent', `rgb(${t.accent_r}, ${t.accent_g}, ${t.accent_b})`);
+  }
+  renderConfigForms(c);
+  const raw = $('cfg-raw');
+  if (raw && document.activeElement !== raw) raw.value = JSON.stringify(c, null, 2);
+}
+
+async function postConfig(patch) {
+  const status = $('cfg-status'); status.textContent = 'saving…'; status.className = '';
+  try {
+    const r = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+    const b = await r.json();
+    if (b.status === 'ok') { status.textContent = 'saved'; status.className = 'ok'; await loadConfig(); }
+    else { status.textContent = b.message || 'save failed'; status.className = 'err'; }
+  } catch (e) { status.textContent = 'request failed: ' + e.message; status.className = 'err'; }
+}
+function saveConfigForms() { postConfig(collectConfigPatch()); }
+function saveConfigRaw() {
+  const status = $('cfg-status');
+  let patch;
+  try { patch = JSON.parse($('cfg-raw').value); }
+  catch (e) { status.textContent = 'invalid JSON: ' + e.message; status.className = 'err'; return; }
+  postConfig(patch);
+}
+
+/* ---------- Plugins ---------- */
+async function loadPlugins() {
+  try {
+    const r = await fetch('/api/plugins'); if (!r.ok) return;
+    renderPlugins(await r.json());
+  } catch (e) {}
+}
+function renderPlugins(list) {
+  const root = $('plugins-list'); root.innerHTML = '';
+  (list || []).forEach(p => {
+    const known = PLUGIN_OPTIONS[p.name] || [];
+    const hasOptUi = known.length > 0;
+    const item = document.createElement('div'); item.className = 'plugin-item';
+
+    const row = document.createElement('div'); row.className = 'plugin-row';
+    const meta = document.createElement('div'); meta.className = 'plugin-meta';
+    meta.innerHTML = `<div class="plugin-name">${escapeHtml(p.name)}${p.enabled ? '' : '<span class="badge">off</span>'}</div><div class="plugin-desc">${escapeHtml(PLUGIN_DESC[p.name] || '')}</div>`;
+    row.appendChild(meta);
+
+    const actions = document.createElement('div'); actions.className = 'plugin-actions';
+    if (hasOptUi) {
+      const optBtn = document.createElement('button'); optBtn.className = 'btn'; optBtn.textContent = 'options';
+      optBtn.addEventListener('click', () => panel.classList.toggle('open'));
+      actions.appendChild(optBtn);
+    }
+    const sw = document.createElement('label'); sw.className = 'switch';
+    const inp = document.createElement('input'); inp.type = 'checkbox'; inp.checked = p.enabled;
+    inp.addEventListener('change', () => togglePlugin(p.name, inp));
+    const sl = document.createElement('span'); sl.className = 'slider';
+    sw.appendChild(inp); sw.appendChild(sl);
+    actions.appendChild(sw);
+    row.appendChild(actions);
+    item.appendChild(row);
+
+    const panel = document.createElement('div'); panel.className = 'plugin-opts-panel';
+    if (hasOptUi) {
+      known.forEach(opt => {
+        const field = document.createElement('div'); field.className = 'field';
+        const lab = document.createElement('label'); lab.textContent = opt.label; field.appendChild(lab);
+        const inp2 = document.createElement('input');
+        inp2.type = opt.secret ? 'password' : (opt.number ? 'number' : 'text');
+        inp2.placeholder = opt.placeholder || '';
+        inp2.dataset.optKey = opt.key;
+        const current = p.options ? p.options[opt.key] : undefined;
+        if (current !== undefined && current !== null) inp2.value = current;
+        field.appendChild(inp2);
+        panel.appendChild(field);
+      });
+      const saveRow = document.createElement('div'); saveRow.className = 'save-row';
+      const saveBtn = document.createElement('button'); saveBtn.className = 'btn primary'; saveBtn.textContent = 'save options';
+      const st = document.createElement('span'); st.className = 'k';
+      saveBtn.addEventListener('click', () => savePluginOptions(p.name, panel, st));
+      saveRow.appendChild(saveBtn); saveRow.appendChild(st);
+      panel.appendChild(saveRow);
+    }
+    item.appendChild(panel);
+    root.appendChild(item);
+  });
+}
+async function togglePlugin(name, inp) {
+  const status = $('plugins-status'); inp.disabled = true;
+  try {
+    const r = await fetch('/api/plugins/' + encodeURIComponent(name) + '/toggle', { method: 'POST' });
+    const b = await r.json();
+    if (b.status === 'ok') { inp.checked = b.enabled; status.textContent = `${name} ${b.enabled ? 'enabled' : 'disabled'} (restart to apply)`; status.className = 'ok'; loadPlugins(); }
+    else { inp.checked = !inp.checked; status.textContent = b.message || 'toggle failed'; status.className = 'err'; }
+  } catch (e) { inp.checked = !inp.checked; status.textContent = 'request failed'; status.className = 'err'; }
+  finally { inp.disabled = false; }
+}
+async function savePluginOptions(name, panel, statusEl) {
+  const options = {};
+  panel.querySelectorAll('[data-opt-key]').forEach(inp => {
+    if (inp.value !== '') options[inp.dataset.optKey] = inp.type === 'number' ? Number(inp.value) : inp.value;
+  });
+  statusEl.textContent = 'saving…';
+  try {
+    const r = await fetch('/api/plugins/' + encodeURIComponent(name) + '/options', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(options),
+    });
+    const b = await r.json();
+    statusEl.textContent = b.status === 'ok' ? 'saved' : (b.message || 'save failed');
+  } catch (e) { statusEl.textContent = 'request failed'; }
+}
+
+/* ---------- Cracked (both sources, deduped) ---------- */
+async function loadCracked() {
+  let local = [], wpasec = [];
+  try { const r = await fetch('/api/cracked'); if (r.ok) local = await r.json(); } catch (e) {}
+  try { const r = await fetch('/api/wpa-sec/cracked'); if (r.ok) wpasec = await r.json(); } catch (e) {}
+  renderCracked(mergeCracked(local, wpasec));
+}
+function normBssid(b) { return (b || '').toLowerCase().replace(/[^0-9a-f]/g, ''); }
+function mergeCracked(local, wpasec) {
+  const byBssid = new Map();
+  const add = (c) => {
+    const key = normBssid(c.bssid) || (c.ssid + ':' + c.password);
+    if (!byBssid.has(key)) byBssid.set(key, { ...c, sources: new Set([c.source]) });
+    else { const e = byBssid.get(key); e.sources.add(c.source); if (!e.ssid && c.ssid) e.ssid = c.ssid; if ((c.duration_secs != null) && (e.duration_secs == null)) Object.assign(e, { duration_secs: c.duration_secs, attack_mode: c.attack_mode, wordlist: c.wordlist, hash_type: c.hash_type }); }
+  };
+  local.forEach(add); wpasec.forEach(add);
+  return [...byBssid.values()].sort((a, b) => (b.cracked_at || 0) - (a.cracked_at || 0));
+}
+function renderCracked(list) {
+  const body = $('cracked-body'); body.innerHTML = '';
+  $('cracked-empty').style.display = (!list || !list.length) ? 'block' : 'none';
+  (list || []).forEach(c => {
+    const sources = [...(c.sources || [c.source])];
+    const pills = sources.map(s => s === 'wpa-sec'
+      ? '<span class="src-pill src-wpasec">wpa-sec</span>'
+      : '<span class="src-pill src-local">local</span>').join(' ');
+    const details = c.duration_secs != null
+      ? `${escapeHtml(c.hash_type || '')} · ${escapeHtml(c.attack_mode || '')}${c.wordlist ? ' · ' + escapeHtml(c.wordlist) : ''} · ${fmtDuration(c.duration_secs)}`
+      : '—';
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${p.name || '—'}</td><td>${p.mac}</td><td>${p.channel}</td><td>${p.mood}</td><td>${p.level}</td><td>${p.signal} dBm</td><td>${p.handshakes_shared}</td><td>${fmtAgo(p.last_seen)}</td>`;
+    tr.innerHTML = `<td>${escapeHtml(c.ssid) || '(hidden)'}</td><td>${escapeHtml(c.bssid)}</td><td>${escapeHtml(c.password)}</td><td>${pills}</td><td>${details}</td><td>${c.cracked_at ? fmtAgo(c.cracked_at) : '—'}</td>`;
     body.appendChild(tr);
   });
 }
 
-function renderHandshakes(list) {
-  const body = $('hs-body');
-  const empty = $('hs-empty');
-  body.innerHTML = '';
-  if (!list || list.length === 0) {
-    empty.style.display = 'block';
-    return;
-  }
-  empty.style.display = 'none';
-  list.slice().sort((a, b) => b.captured_at - a.captured_at).forEach((h) => addHandshakeRow(h, false));
-}
-
-const ACTIVITY_MAX_LINES = 200;
-
-function addActivityLine(level, message) {
-  const log = $('activity-log');
-  $('activity-empty').style.display = 'none';
-  $('activity-hint').textContent = 'live';
-  const line = document.createElement('div');
-  const cls = (level || '').toLowerCase();
-  line.className = 'activity-line' + (cls === 'error' ? ' err' : cls === 'warning' ? ' warn' : cls === 'priority' ? ' priority' : '');
-  const time = new Date().toLocaleTimeString();
-  line.innerHTML = `<span class="lvl">${time}</span><span class="msg">${escapeHtml(message)}</span>`;
-  log.appendChild(line);
-  while (log.children.length > ACTIVITY_MAX_LINES) {
-    log.removeChild(log.firstChild);
-  }
-  log.scrollTop = log.scrollHeight;
-}
-
-function escapeHtml(s) {
-  const div = document.createElement('div');
-  div.textContent = s;
-  return div.innerHTML;
-}
-
-function addHandshakeRow(h, fresh) {
-  const body = $('hs-body');
-  $('hs-empty').style.display = 'none';
-  const tr = document.createElement('tr');
-  if (fresh) tr.className = 'fresh';
-  const time = h.captured_at ? fmtAgo(h.captured_at) : 'just now';
-  tr.innerHTML = `<td>${time}</td><td>${h.ssid || '(hidden)'}</td><td>${h.bssid}</td><td>${h.channel}</td><td>${h.handshake_type}</td>`;
-  body.insertBefore(tr, body.firstChild);
-}
-
-function renderConfig(c) {
-  const main = c.main || {};
-  const p = c.personality || {};
-  const ui = c.ui || {};
-  const web = ui.web || {};
-  const display = ui.display || {};
-
-  set('agent-name', main.name ? `PWNGHOST-RS — ${main.name}` : 'PWNGHOST-RS');
-  set('cfg-name', main.name);
-  set('cfg-iface', main.iface);
-  set('cfg-lang', main.lang);
-  set('cfg-whitelist', (main.whitelist && main.whitelist.length) ? main.whitelist.join(', ') : 'none');
-  set('cfg-web', `${web.enabled ? 'on' : 'off'} @ ${web.address}:${web.port}${web.auth ? ' (auth)' : ''}`);
-  set('cfg-display', `${display.enabled ? 'on' : 'off'} — ${display.display_type}, rot ${display.rotation}°`);
-  set('cfg-attack', `${p.deauth ? 'on' : 'off'} / ${p.associate ? 'on' : 'off'}`);
-  set('cfg-recon', `${p.min_recon_time}s / ${p.max_recon_time}s / ${p.hop_recon_time}s`);
-  set('cfg-rewards', `${p.reward_handshake} / ${p.reward_new_ap} / ${p.reward_association}`);
-  set('cfg-thresholds', `${p.bored_num_epochs} / ${p.sad_num_epochs} / ${p.angry_num_epochs} / ${p.lonely_num_epochs}`);
-
-  if (web.theme) {
-    const t = web.theme;
-    document.documentElement.style.setProperty('--accent', `rgb(${t.accent_r}, ${t.accent_g}, ${t.accent_b})`);
-  }
-
-  $('cfg-raw').textContent = JSON.stringify(c, null, 2);
-}
-
-async function loadStatus() {
-  try {
-    const r = await fetch('/api/status');
-    if (!r.ok) return;
-    const s = await r.json();
-    applySession(s);
-    applyStatusExtras(s);
-  } catch (e) {}
-}
-
-async function loadPeers() {
-  try {
-    const r = await fetch('/api/peers');
-    if (!r.ok) return;
-    renderPeers(await r.json());
-  } catch (e) {}
-}
-
-async function loadHandshakes() {
-  try {
-    const r = await fetch('/api/handshakes');
-    if (!r.ok) return;
-    renderHandshakes(await r.json());
-  } catch (e) {}
-}
-
-async function loadConfig() {
-  try {
-    const r = await fetch('/api/config');
-    if (!r.ok) return;
-    renderConfig(await r.json());
-  } catch (e) {}
-}
+/* ---------- Fetchers ---------- */
+async function loadStatus() { try { const r = await fetch('/api/status'); if (!r.ok) return; const s = await r.json(); applySession(s); applyStatusExtras(s); } catch (e) {} }
+async function loadPeers() { try { const r = await fetch('/api/peers'); if (!r.ok) return; renderPeers(await r.json()); } catch (e) {} }
+async function loadHandshakes() { try { const r = await fetch('/api/handshakes'); if (!r.ok) return; renderHandshakes(await r.json()); } catch (e) {} }
+async function loadConfig() { try { const r = await fetch('/api/config'); if (!r.ok) return; renderConfig(await r.json()); } catch (e) {} }
 
 $('peers-refresh').addEventListener('click', loadPeers);
 $('hs-refresh').addEventListener('click', loadHandshakes);
 $('cfg-refresh').addEventListener('click', loadConfig);
+$('cfg-save').addEventListener('click', saveConfigForms);
+$('cfg-save-2').addEventListener('click', saveConfigForms);
+$('cfg-save-raw').addEventListener('click', saveConfigRaw);
+$('cfg-revert').addEventListener('click', () => { if (lastConfig) renderConfig(lastConfig); });
+$('plugins-refresh').addEventListener('click', loadPlugins);
+$('cracked-refresh').addEventListener('click', loadCracked);
 
-let ws = null;
-let reconnectDelay = 1000;
-let fallbackTimer = null;
-
+/* ---------- WebSocket live ---------- */
+let ws = null, reconnectDelay = 1000, fallbackTimer = null;
 function setConn(state) {
-  const dot = $('conn-dot');
-  const text = $('conn-text');
-  dot.className = 'dot ' + (state === 'ok' ? 'ok' : state === 'pending' ? 'pending' : '');
-  text.textContent = state === 'ok' ? 'live' : state === 'pending' ? 'connecting…' : 'offline (polling)';
+  $('conn-dot').className = 'dot ' + (state === 'ok' ? 'ok' : state === 'pending' ? 'pending' : '');
+  $('conn-text').textContent = state === 'ok' ? 'live' : state === 'pending' ? 'connecting…' : 'offline (polling)';
 }
-
-function startFallbackPolling() {
-  if (fallbackTimer) return;
-  fallbackTimer = setInterval(loadStatus, 3000);
-}
-
-function stopFallbackPolling() {
-  if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = null; }
-}
-
+function startFallbackPolling() { if (!fallbackTimer) fallbackTimer = setInterval(loadStatus, 3000); }
+function stopFallbackPolling() { if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = null; } }
 function connectWs() {
   setConn('pending');
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws`);
-
-  ws.onopen = () => {
-    setConn('ok');
-    stopFallbackPolling();
-    reconnectDelay = 1000;
-  };
-
+  ws.onopen = () => { setConn('ok'); stopFallbackPolling(); reconnectDelay = 1000; };
   ws.onmessage = (evt) => {
-    let msg;
-    try { msg = JSON.parse(evt.data); } catch (e) { return; }
+    let msg; try { msg = JSON.parse(evt.data); } catch (e) { return; }
     switch (msg.type) {
-      case 'Session':
-        applySession(msg);
-        break;
-      case 'MoodChange':
-        set('mood', msg.mood);
-        set('face', msg.face);
-        break;
-      case 'Handshake':
-        addHandshakeRow({ bssid: msg.bssid, ssid: msg.ssid, channel: msg.channel, handshake_type: msg.handshake_type, captured_at: null }, true);
-        break;
-      case 'Peer':
-        loadPeers();
-        break;
-      case 'PeerLost':
-        loadPeers();
-        break;
-      case 'ChannelChange':
-        set('channel', msg.channel);
-        break;
-      case 'Status':
-        applyStatusExtras(msg);
-        break;
-      case 'AoActivity':
-        addActivityLine(msg.level, msg.message);
-        break;
+      case 'Session': applySession(msg); break;
+      case 'MoodChange': set('mood', msg.mood); set('face', msg.face); break;
+      case 'Handshake': addHandshakeRow({ bssid: msg.bssid, ssid: msg.ssid, channel: msg.channel, handshake_type: msg.handshake_type, captured_at: null }, true); break;
+      case 'Peer': case 'PeerLost': loadPeers(); break;
+      case 'ChannelChange': set('channel', msg.channel); break;
+      case 'Status': applyStatusExtras(msg); break;
+      case 'Activity': addActivityLine(msg.level, msg.message); break;
     }
   };
-
-  ws.onclose = () => {
-    setConn('offline');
-    startFallbackPolling();
-    setTimeout(connectWs, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, 30000);
-  };
-
+  ws.onclose = () => { setConn('offline'); startFallbackPolling(); setTimeout(connectWs, reconnectDelay); reconnectDelay = Math.min(reconnectDelay * 2, 30000); };
   ws.onerror = () => { ws.close(); };
 }
 
-// Live e-ink frame: re-fetch /ui once a second with a cache-buster, exactly
-// like real pwnagotchi's dashboard. The <img> shows the actual rendered
-// frame the panel is displaying.
-function refreshUiFrame() {
-  const img = $('ui');
-  if (!img) return;
-  img.src = '/ui?' + Date.now();
-}
+/* ---------- Live e-ink frame ---------- */
+function refreshUiFrame() { const img = $('ui'); if (img) img.src = '/ui?' + Date.now(); }
 $('ui').addEventListener('error', () => { $('live-hint').textContent = 'display not ready'; });
 $('ui').addEventListener('load', () => { $('live-hint').textContent = 'the actual e-ink frame'; });
-refreshUiFrame();
-setInterval(refreshUiFrame, 1000);
 
-loadStatus();
-loadPeers();
-loadHandshakes();
-loadConfig();
+// boot
+loadStatus(); loadPeers(); loadHandshakes(); loadConfig(); loadedTabs.config = true;
+refreshUiFrame(); setInterval(refreshUiFrame, 1000);
 connectWs();
 </script>
 </body>

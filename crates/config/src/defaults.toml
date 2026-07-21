@@ -1,5 +1,15 @@
-# PWNGHOST-RS Default Configuration
-# This file is embedded in the config crate and provides all default values
+﻿# PWNGHOST-RS Default Configuration -- REFERENCE ONLY, NOT LOADED AT RUNTIME.
+#
+# Despite the filename, this file is never parsed or embedded anywhere:
+# `config::load_config` builds its baseline from `Serialized::defaults(
+# PwnConfig::default())` -- i.e. schema.rs's per-field `Default` impls are
+# the real source of truth. Keep this file in sync with schema.rs by hand
+# as a human-readable "what ships out of the box, all in one place"
+# reference (mirroring real pwnagotchi's own `defaults.toml`, which IS
+# functionally loaded there -- ours isn't, a divergence discovered
+# 2026-07-20 when `[plugins.*].enabled` here disagreed with schema.rs's
+# `default_plugins()`, which had drifted to enabling every plugin
+# unconditionally; fixed in schema.rs, not here).
 
 [main]
 name = "pwnghost"
@@ -40,9 +50,9 @@ max_recon_time = 30
 hop_recon_time = 10
 # Active deauthentication of discovered APs to force clients to
 # re-handshake -- this is real pwnagotchi's core "pwning" behavior and its
-# own default. With this off, AngryOxide runs purely passive (--disable-
-# deauth) and captures far fewer handshakes. AngryOxide does the actual
-# deauthing autonomously; this flag just controls whether it's told to.
+# own default. With this off, the agent runs purely passive and captures
+# far fewer handshakes. When on, the agent issues deauth/assoc against
+# targeted APs (via the bettercap capture backend) to provoke handshakes.
 deauth = true
 associate = true
 min_rssi = -80
@@ -50,30 +60,6 @@ position_x = 0
 position_y = 34
 frame_padding = true
 frame_padding_min_bytes = 650
-
-[personality.faces]
-look_r = ["( ⚆_⚆)"]
-look_l = ["(☉_☉ )"]
-look_r_happy = ["( ◕‿◕)", "( ≧◡≦)"]
-look_l_happy = ["(◕‿◕ )", "(≧◡≦ )"]
-sleep = ["(⇀‿‿↼)", "(≖‿‿≖)", "(－_－)"]
-awake = ["(◕‿‿◕)"]
-bored = ["(-__-)", "(—__—)"]
-intense = ["(°▃▃°)", "(°ロ°)"]
-cool = ["(⌐■_■)", "(单__单)"]
-happy = ["(•‿‿•)", "(^‿‿^)", "(^◡◡^)"]
-excited = ["(ᵔ◡◡ᵔ)", "(✜‿‿✜)"]
-grateful = ["(^‿‿^)"]
-motivated = ["(☼‿‿☼)", "(★‿★)", "(•̀ᴗ•́)"]
-demotivated = ["(≖__≖)", "(￣ヘ￣)", "(¬_¬)"]
-smart = ["(✜‿‿✜)"]
-lonely = ["(ب__ب)", "(｡•́︿•̀｡)", "(︶︹︺)"]
-sad = ["(╥☁╥ )", "(╥﹏╥)", "(ಥ﹏ಥ)"]
-angry = ["(-_-')", "(⇀__⇀)", "(`___´)"]
-friend = ["(♥‿‿♥)", "(♡‿‿♡)", "(♥‿♥ )", "(♥ω♥ )"]
-broken = ["(☓‿‿☓)"]
-upload = ["(1__0)", "(1__1)", "(0__1)"]
-png = false
 
 [ui.web]
 enabled = true
@@ -98,7 +84,7 @@ display_type = "waveshare_v4"
 [ui.faces]
 png = true
 position_x = 0
-position_y = 16
+position_y = 34
 
 [bettercap]
 handshakes = "/etc/pwnghost/handshakes"
@@ -155,8 +141,17 @@ enabled = true
 [plugins.fix_services]
 enabled = true
 
+# Off by default -- requires a physical button (e.g. the PiSugar S battery
+# module's button). BCM GPIO3 is shared with I2C1 SCL: PiSugar's own docs
+# require the board's "auto power-on" switch be set OFF before enabling
+# this, or the pin gets held low for wake-on-power and corrupts any real
+# I2C1 traffic. This is a physical switch on the board, not fixable in
+# software. Long-press (held >= long_press_secs) triggers a safe shutdown;
+# short-press is detected/logged only, no action bound.
 [plugins.gpio_buttons]
 enabled = false
+pin = 3
+long_press_secs = 3
 
 [plugins.gps]
 enabled = false

@@ -1,7 +1,7 @@
 #!/bin/bash -e
 # 00-install-pwnghost/00-run.sh - Install pwnghost-rs config + systemd unit.
 #
-# The pwnghost-rs binary itself and AngryOxide were already installed by
+# The pwnghost-rs binary itself was already installed by
 # stage4/00-install-artifacts. This stage lays down /etc/pwnghost, the
 # default config.toml, the pwnghost-rs.service unit, and the manual
 # monstart/monstop helper scripts.
@@ -83,7 +83,7 @@ display_type = "waveshare_v4"
 [ui.faces]
 png = false
 position_x = 0
-position_y = 16
+position_y = 34
 
 [bettercap]
 handshakes = "/etc/pwnghost/handshakes"
@@ -150,6 +150,15 @@ NotifyAccess=main
 ExecStart=/usr/local/bin/pwnghost-rs --config /etc/pwnghost/config.toml
 Restart=on-failure
 RestartSec=5
+# The app's own main loop calls sd_notify::watchdog() every 15s (see
+# crates/pwnghost-rs/src/main.rs's watchdog_interval), but that call is
+# inert without this: without WatchdogSec=, systemd never arms watchdog
+# tracking at all, so a genuinely hung (not crashed) process would never
+# be noticed or restarted. 45s is 3x the app's own 15s notify cadence,
+# tolerating a couple of missed beats from scheduling jitter before
+# treating it as a real hang. Mirrors the same fix in
+# tools/rebase-jayofelony/overlay/etc/systemd/system/pwnghost-rs.service.
+WatchdogSec=45
 
 # Deliberately NOT sandboxed with ProtectSystem=strict/PrivateTmp=yes/
 # ReadWritePaths= (an earlier revision had all three). None of the

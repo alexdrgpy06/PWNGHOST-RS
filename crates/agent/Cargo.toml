@@ -5,7 +5,6 @@ edition = "2021"
 description = "Main agent loop for PWNGHOST-RS"
 
 [dependencies]
-angryoxide = { path = "../angryoxide" }
 pwncore = { path = "../pwncore" }
 config = { path = "../config" }
 rl-agent = { path = "../rl-agent" }
@@ -20,6 +19,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 rand = { workspace = true }
 mac-addr = { workspace = true }
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

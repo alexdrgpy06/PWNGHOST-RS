@@ -4,6 +4,7 @@ pub mod capture;
 pub mod epoch;
 pub mod faces;
 pub mod healing;
+pub mod identity;
 pub mod mesh;
 pub mod personality;
 pub mod plugins;
@@ -13,6 +14,7 @@ pub use capture::CaptureManager;
 pub use epoch::{EpochState, EpochTracker};
 pub use faces::face_for_mood;
 pub use healing::{Healer, HealingAction, HealingConfig, HealingLayer};
+pub use identity::Identity;
 pub use mesh::{MeshManager, MeshPeer, MeshPeerInfo};
 pub use personality::Personality;
 pub use plugins::{LuaPlugin, PluginApi, PluginManager};
@@ -23,7 +25,7 @@ use pwncore::{AccessPoint, Channel, Mood, Peer as CorePeer};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{error, warn};
 
 /// Main agent structure
 pub struct Agent {
@@ -144,9 +146,9 @@ impl Agent {
             let action = self.healer.decide();
             match action {
                 HealingAction::None => {}
-                HealingAction::RestartAo => {
+                HealingAction::RestartCapture => {
                     warn!(
-                        "Healer: Restarting AngryOxide (layer {:?})",
+                        "Healer: Soft-resetting capture backend (layer {:?})",
                         self.healer.active_layer()
                     );
                 }
@@ -366,11 +368,11 @@ impl Agent {
         self.aps.len()
     }
 
-    /// Currently unreachable: nothing populates individual AP records from a
-    /// live AngryOxide signal today (AO exposes no such data over its
-    /// CLI/stdout interface - see `angryoxide::parser` docs). Kept for
-    /// `update_aps`/tests and as a ready-made insertion point if a future,
-    /// honest AP-discovery signal is added.
+    /// Merge one AP observation into `self.aps`, updating in place if we've
+    /// already seen this BSSID. Fed real data since Phase 1 by
+    /// `bettercap::WifiSession::to_pwncore` via `update_aps` in
+    /// `pwnghost-rs`'s main loop (previously unreachable: AngryOxide exposed
+    /// no AP data over its CLI/stdout interface at all).
     #[allow(dead_code)]
     fn add_or_update_ap(&mut self, ap: AccessPoint) -> bool {
         if let Some(existing) = self.aps.iter_mut().find(|a| a.bssid == ap.bssid) {
@@ -413,40 +415,6 @@ impl Agent {
         }
     }
 
-    /// Handle one AngryOxide event. See `angryoxide::parser` for the honest
-    /// event vocabulary: a `HandshakeFileWritten`/`CaptureFileWritten` is a
-    /// real file AO wrote (validated separately by the capture pipeline,
-    /// triggered by the caller upon seeing this event); a `StatusLine` is a
-    /// best-effort, informational-only log line from AO's stdout.
-    pub fn handle_event(&mut self, event: &angryoxide::parser::AoEvent) {
-        use angryoxide::parser::{AoEvent, StatusLevel};
-
-        match event {
-            AoEvent::HandshakeFileWritten(path) => {
-                info!("AngryOxide wrote a handshake file: {:?}", path);
-                // Track capture activity for mood/epoch purposes now; the
-                // caller is responsible for running the capture pipeline
-                // (hcxpcapngtool validation + move-to-final) and calling
-                // `mark_handshake_captured` with the real bssid it extracts.
-                self.epoch_tracker.current.track_handshake();
-            }
-            AoEvent::CaptureFileWritten(path) => {
-                debug!("AngryOxide capture activity: {:?}", path);
-            }
-            AoEvent::StatusLine { level, message } => match level {
-                StatusLevel::Error => error!("AngryOxide: {}", message),
-                StatusLevel::Warning => warn!("AngryOxide: {}", message),
-                StatusLevel::Priority => info!("AngryOxide [priority]: {}", message),
-                StatusLevel::Status | StatusLevel::Info => info!("AngryOxide: {}", message),
-            },
-        }
-    }
-
-    pub fn handle_events(&mut self, events: &[angryoxide::parser::AoEvent]) {
-        for event in events {
-            self.handle_event(event);
-        }
-    }
 }
 
 /// Actions the agent can take
@@ -517,8 +485,7 @@ mod tests {
             agent.tick();
         }
         let mood = agent.current_mood();
-        let faces = mood.faces();
-        assert!(!faces.is_empty());
+        assert!(!mood.face().is_empty());
     }
 
     #[test]
@@ -564,47 +531,19 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_handshake_file_written_event() {
+    fn test_track_handshake_increments_epoch_counter() {
+        // Phase 1: the "PWND"/epoch handshake counter used to be bumped
+        // from `Agent::handle_event`'s AngryOxide `HandshakeFileWritten`
+        // branch (now removed -- nothing calls it since bettercap replaced
+        // AngryOxide). `pwnghost-rs`'s main loop now calls
+        // `epoch_tracker.current.track_handshake()` directly wherever the
+        // capture pipeline confirms a real handshake; this just confirms
+        // that counter still behaves as expected.
         let mut agent = Agent::default();
         agent.start();
-
-        let event =
-            angryoxide::parser::AoEvent::HandshakeFileWritten("/tmp/capture.hc22000".into());
-        agent.handle_event(&event);
-
-        assert_eq!(agent.epoch_tracker.current.handshakes_this_epoch, 1);
-    }
-
-    #[test]
-    fn test_handle_capture_file_written_event_is_informational() {
-        let mut agent = Agent::default();
-        agent.start();
-
-        let event = angryoxide::parser::AoEvent::CaptureFileWritten("/tmp/capture.pcapng".into());
-        // Should not panic and should not affect epoch counters.
-        agent.handle_event(&event);
-        assert_eq!(agent.epoch_tracker.current.handshakes_this_epoch, 0);
-    }
-
-    #[test]
-    fn test_handle_status_line_event_all_levels() {
-        let mut agent = Agent::default();
-        agent.start();
-
-        for level in [
-            angryoxide::parser::StatusLevel::Error,
-            angryoxide::parser::StatusLevel::Warning,
-            angryoxide::parser::StatusLevel::Priority,
-            angryoxide::parser::StatusLevel::Status,
-            angryoxide::parser::StatusLevel::Info,
-        ] {
-            let event = angryoxide::parser::AoEvent::StatusLine {
-                level,
-                message: "test message".to_string(),
-            };
-            // Should not panic for any level.
-            agent.handle_event(&event);
-        }
+        agent.epoch_tracker.current.track_handshake();
+        agent.epoch_tracker.current.track_handshake();
+        assert_eq!(agent.epoch_tracker.current.handshakes_this_epoch, 2);
     }
 
     #[test]
@@ -654,19 +593,6 @@ mod tests {
             xp_before,
             agent.personality.stats().xp
         );
-    }
-
-    #[test]
-    fn test_handle_events_batch() {
-        let mut agent = Agent::default();
-        agent.start();
-
-        let events = vec![
-            angryoxide::parser::AoEvent::HandshakeFileWritten("/tmp/a.hc22000".into()),
-            angryoxide::parser::AoEvent::HandshakeFileWritten("/tmp/b.hc22000".into()),
-        ];
-        agent.handle_events(&events);
-        assert_eq!(agent.epoch_tracker.current.handshakes_this_epoch, 2);
     }
 
     #[test]

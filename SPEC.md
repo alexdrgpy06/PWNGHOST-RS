@@ -6,14 +6,25 @@ Build a **complete, flashable SD card image** for:
 - **Raspberry Pi Zero W** (ARMv6, BCM43430/1, 32-bit)
 - **Raspberry Pi Zero 2W** (ARMv7/ARMv8, BCM43436B0, 32-bit userland)
 
-That replaces the Python pwnagotchi with a **pure Rust implementation** using **AngryOxide** as the WiFi attack engine. The image must:
+That replaces the Python pwnagotchi with a **pure Rust implementation**. This
+section describes the *original* design intent (AngryOxide as the WiFi
+engine); Phase 1 of the rework (see `REWORK_PLAN.md`, the current, living
+plan) switched the capture backend to **bettercap** after discovering
+AngryOxide cannot capture at all on this hardware's FullMAC chip -- the
+"What We Take from Each Repo" table below is kept as historical
+design-provenance record, not a description of current behavior. The image
+must:
 - Be a drop-in replacement for jayofelony's pwnagotchi (bookworm, 32-bit userland)
-- Use **AngryOxide** (Ragnt/AngryOxide) for WiFi recon, handshake capture, deauth/assoc/PMKID/CSA/anon-reassoc/rogue-M2 attacks
+- Use **bettercap** (the base jayofelony image's own capture engine) for WiFi
+  recon, handshake capture, and deauth/assoc attacks -- see `REWORK_PLAN.md`
+  Workstream A for why AngryOxide, the original plan here, was replaced
 - Include **CoderFX's BCM43436B0 firmware stability patches** (8 layers) + userspace keepalive daemon
 - **Port the A2C RL agent (LSTM + MLP policy)** to Rust for intelligent channel selection and attack decisions
 - Support **Waveshare e-ink displays** (SSD1306, 2.13"/2.7"/2.9" V4) + **web UI** (port 8080)
 - Use **TOML config** compatible with existing `config.toml` / `defaults.toml`
-- Run as a single `pwnghost-rs` systemd service (no Python, no bettercap binary)
+- Run as a single `pwnghost-rs` systemd service (no Python) alongside
+  bettercap as its own systemd unit (the capture engine, per the Phase 1
+  pivot noted above -- not spawned/owned by `pwnghost-rs` itself)
 - Include **Lua plugin system** (via `mlua`) for extensibility
 - Feature **classic pwnagotchi faces** (kaomoji mood system) enhanced with better rendering
 - Implement **6-layer self-healing** (firmware watchdog, crash detection, AO watchdog, GPIO power cycle, graceful give-up, USB lifeline)

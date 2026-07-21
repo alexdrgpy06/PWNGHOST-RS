@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 pub enum HealingLayer {
     FwWatchdog,
     CrashLoop,
-    AoBackoff,
+    CaptureBackoff,
     GpioCycle,
     GiveUp,
     UsbLifeline,
@@ -18,8 +18,8 @@ impl HealingLayer {
     pub fn next(&self) -> Option<Self> {
         match self {
             HealingLayer::FwWatchdog => Some(HealingLayer::CrashLoop),
-            HealingLayer::CrashLoop => Some(HealingLayer::AoBackoff),
-            HealingLayer::AoBackoff => Some(HealingLayer::GpioCycle),
+            HealingLayer::CrashLoop => Some(HealingLayer::CaptureBackoff),
+            HealingLayer::CaptureBackoff => Some(HealingLayer::GpioCycle),
             HealingLayer::GpioCycle => Some(HealingLayer::GiveUp),
             HealingLayer::GiveUp => Some(HealingLayer::UsbLifeline),
             HealingLayer::UsbLifeline => None,
@@ -31,7 +31,7 @@ impl HealingLayer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HealingAction {
     None,
-    RestartAo,
+    RestartCapture,
     PowerCycleGpio,
     EnterSafeMode,
     EnableUsbLifeline,
@@ -44,7 +44,7 @@ pub struct HealingConfig {
     pub crash_threshold: u32,
     pub gpio_cycle_pin: u8,
     pub gpio_cycle_duration_ms: u64,
-    pub max_ao_backoff_attempts: u32,
+    pub max_capture_backoff_attempts: u32,
 }
 
 impl Default for HealingConfig {
@@ -54,7 +54,7 @@ impl Default for HealingConfig {
             crash_threshold: 3,
             gpio_cycle_pin: 41,
             gpio_cycle_duration_ms: 100,
-            max_ao_backoff_attempts: 5,
+            max_capture_backoff_attempts: 5,
         }
     }
 }
@@ -142,7 +142,7 @@ impl Healer {
             HealingLayer::FwWatchdog | HealingLayer::CrashLoop => {
                 self.crashes_in_window(Instant::now()) >= self.config.crash_threshold
             }
-            HealingLayer::AoBackoff | HealingLayer::GpioCycle | HealingLayer::GiveUp => true,
+            HealingLayer::CaptureBackoff | HealingLayer::GpioCycle | HealingLayer::GiveUp => true,
             HealingLayer::UsbLifeline => false,
         }
     }
@@ -157,7 +157,7 @@ impl Healer {
             HealingLayer::FwWatchdog => {
                 if crash_count >= self.config.crash_threshold {
                     self.escalate();
-                    HealingAction::RestartAo
+                    HealingAction::RestartCapture
                 } else {
                     HealingAction::None
                 }
@@ -166,20 +166,20 @@ impl Healer {
             HealingLayer::CrashLoop => {
                 if crash_count >= self.config.crash_threshold {
                     self.escalate();
-                    HealingAction::RestartAo
+                    HealingAction::RestartCapture
                 } else {
                     HealingAction::None
                 }
             }
 
-            HealingLayer::AoBackoff => {
+            HealingLayer::CaptureBackoff => {
                 let max_backoff =
-                    Self::ao_backoff_max_duration(self.config.max_ao_backoff_attempts);
+                    Self::capture_backoff_max_duration(self.config.max_capture_backoff_attempts);
                 if self.time_in_current_layer() > max_backoff {
                     self.escalate();
                     HealingAction::PowerCycleGpio
                 } else {
-                    HealingAction::RestartAo
+                    HealingAction::RestartCapture
                 }
             }
 
@@ -235,7 +235,7 @@ impl Healer {
     }
 
     /// Calculate max backoff duration
-    fn ao_backoff_max_duration(max_attempts: u32) -> Duration {
+    fn capture_backoff_max_duration(max_attempts: u32) -> Duration {
         let total_secs = if max_attempts < 63 {
             (1u64 << max_attempts).saturating_sub(1)
         } else {
@@ -326,10 +326,10 @@ mod tests {
         );
         assert_eq!(
             HealingLayer::CrashLoop.next(),
-            Some(HealingLayer::AoBackoff)
+            Some(HealingLayer::CaptureBackoff)
         );
         assert_eq!(
-            HealingLayer::AoBackoff.next(),
+            HealingLayer::CaptureBackoff.next(),
             Some(HealingLayer::GpioCycle)
         );
         assert_eq!(HealingLayer::GpioCycle.next(), Some(HealingLayer::GiveUp));
@@ -346,7 +346,7 @@ mod tests {
         assert_eq!(healer.active_layer(), HealingLayer::CrashLoop);
 
         healer.escalate();
-        assert_eq!(healer.active_layer(), HealingLayer::AoBackoff);
+        assert_eq!(healer.active_layer(), HealingLayer::CaptureBackoff);
 
         healer.escalate();
         assert_eq!(healer.active_layer(), HealingLayer::GpioCycle);
@@ -367,7 +367,7 @@ mod tests {
         let mut healer = Healer::new();
         healer.escalate();
         healer.escalate();
-        assert_eq!(healer.active_layer(), HealingLayer::AoBackoff);
+        assert_eq!(healer.active_layer(), HealingLayer::CaptureBackoff);
 
         healer.deescalate();
         assert_eq!(healer.active_layer(), HealingLayer::FwWatchdog);
@@ -385,7 +385,7 @@ mod tests {
 
         healer.report_crash();
         let action = healer.decide();
-        assert_eq!(action, HealingAction::RestartAo);
+        assert_eq!(action, HealingAction::RestartCapture);
     }
 
     #[test]
@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(cfg.crash_threshold, 3);
         assert_eq!(cfg.gpio_cycle_pin, 41);
         assert_eq!(cfg.gpio_cycle_duration_ms, 100);
-        assert_eq!(cfg.max_ao_backoff_attempts, 5);
+        assert_eq!(cfg.max_capture_backoff_attempts, 5);
     }
 
     #[test]

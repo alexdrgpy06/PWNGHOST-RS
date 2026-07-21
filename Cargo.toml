@@ -57,6 +57,11 @@ hex = "0.4"
 base64 = "0.21"
 sha2 = "0.10"
 async-trait = "0.1"
+# Persistent unit identity (Workstream D1): pure-Rust ed25519 (via
+# curve25519-dalek), no C/asm dependency, cross-compiles cleanly to ARMv6 --
+# same rationale as the fontdue choice above (avoid FreeType/OpenSSL-class
+# native deps on this target).
+ed25519-dalek = "2"
 # Blocking HTTP client for the bettercap REST client (crates/bettercap).
 # bettercap's API is loopback-only plain HTTP (never TLS), so a minimal
 # blocking client wrapped in spawn_blocking is simpler and much lighter to
@@ -68,7 +73,20 @@ opt-level = "z"
 lto = "thin"
 codegen-units = 4
 strip = true
-panic = "abort"
+# NOT "abort". A real diagnosis this session traced an SD-card corruption
+# bug in the reference Python implementation to exactly this class of
+# problem: an unhandled fault killing the whole process outright, which
+# then crash-loops. Our own bettercap JSON/websocket parsing already
+# degrades gracefully into Result/JoinError (see crates/bettercap/src and
+# main.rs's spawn_blocking call sites) -- but with panic="abort", any
+# panic anywhere (including inside a spawn_blocking task) aborts the
+# entire process before that JoinError handling ever runs, making it
+# theoretical. "unwind" lets a panic in one tokio task surface as a
+# catchable JoinError instead of taking the whole process down, and pairs
+# with the std::panic::set_hook in main.rs that logs before either
+# outcome so a panic is diagnosable in the journal instead of a bare
+# SIGABRT indistinguishable from OOM/segfault.
+panic = "unwind"
 
 [profile.dev]
 debug = true

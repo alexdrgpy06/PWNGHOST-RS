@@ -84,6 +84,45 @@ impl PluginManager {
         }
     }
 
+    /// The canonical set of built-in plugins, embedded at compile time.
+    /// Exposed so the web layer can enumerate every built-in (loaded or not)
+    /// for the plugins page. Keep this list and `default_plugins()` in
+    /// `config/src/schema.rs` in sync.
+    pub const BUILTINS: &'static [(&'static str, &'static str)] = &[
+        ("auto_tune", include_str!("../../lua/auto_tune.lua")),
+        ("auto_backup", include_str!("../../lua/auto_backup.lua")),
+        ("auto_update", include_str!("../../lua/auto_update.lua")),
+        ("bt_tether", include_str!("../../lua/bt_tether.lua")),
+        ("cache", include_str!("../../lua/cache.lua")),
+        ("fix_services", include_str!("../../lua/fix_services.lua")),
+        ("gpio_buttons", include_str!("../../lua/gpio_buttons.lua")),
+        ("gps", include_str!("../../lua/gps.lua")),
+        ("grid", include_str!("../../lua/grid.lua")),
+        ("logtail", include_str!("../../lua/logtail.lua")),
+        ("memtemp", include_str!("../../lua/memtemp.lua")),
+        ("ohcapi", include_str!("../../lua/ohcapi.lua")),
+        ("pisugarx", include_str!("../../lua/pisugarx.lua")),
+        ("pwncrack", include_str!("../../lua/pwncrack.lua")),
+        ("session_stats", include_str!("../../lua/session_stats.lua")),
+        ("ups_lite", include_str!("../../lua/ups_lite.lua")),
+        ("webcfg", include_str!("../../lua/webcfg.lua")),
+        ("wigle", include_str!("../../lua/wigle.lua")),
+        ("wpa_sec", include_str!("../../lua/wpa_sec.lua")),
+    ];
+
+    /// The names of every built-in plugin (see [`Self::BUILTINS`]).
+    pub fn builtin_names() -> impl Iterator<Item = &'static str> {
+        Self::BUILTINS.iter().map(|(n, _)| *n)
+    }
+
+    /// Whether a plugin should be loaded, per its `[plugins.<name>].enabled`
+    /// flag. Unlisted plugins default to enabled (matches `PluginConfig`'s
+    /// own default), but every built-in is listed in `defaults.toml`, so in
+    /// practice this reads the real per-plugin flag.
+    fn plugin_enabled(plugins_cfg: &HashMap<String, config::schema::PluginConfig>, name: &str) -> bool {
+        plugins_cfg.get(name).map(|p| p.enabled).unwrap_or(true)
+    }
+
     /// Create a plugin manager and load plugins described by `config`.
     pub async fn load(config: &config::PwnConfig) -> Result<Self> {
         let mut mgr = Self {
@@ -91,62 +130,57 @@ impl PluginManager {
             plugin_dir: std::path::PathBuf::from(&config.main.custom_plugins),
         };
 
-        mgr.load_plugins().await?;
+        mgr.load_plugins(&config.plugins).await?;
         Ok(mgr)
     }
 
-    async fn load_plugins(&mut self) -> Result<()> {
-        // Load user plugins from disk if the directory exists.
+    async fn load_plugins(
+        &mut self,
+        plugins_cfg: &HashMap<String, config::schema::PluginConfig>,
+    ) -> Result<()> {
+        // Load user plugins from disk if the directory exists, gated by their
+        // `[plugins.<name>].enabled` flag (the plugin's key is its filename
+        // without the `.lua` extension).
         if self.plugin_dir.exists() {
             let mut entries = tokio::fs::read_dir(&self.plugin_dir).await?;
             while let Some(entry) = entries.next_entry().await? {
                 if entry.path().extension().is_some_and(|e| e == "lua") {
                     let name = entry.file_name().to_string_lossy().to_string();
+                    let key = name.strip_suffix(".lua").unwrap_or(&name);
+                    if !Self::plugin_enabled(plugins_cfg, key) {
+                        info!("Skipping disabled plugin: {}", key);
+                        continue;
+                    }
                     let code = tokio::fs::read_to_string(entry.path()).await?;
 
-                    match LuaPlugin::new(&name, &code) {
+                    match LuaPlugin::new(key, &code) {
                         Ok(plugin) => {
-                            self.plugins.insert(name.clone(), plugin);
-                            info!("Loaded plugin: {}", name);
+                            self.plugins.insert(key.to_string(), plugin);
+                            info!("Loaded plugin: {}", key);
                         }
                         Err(e) => {
-                            warn!("Failed to load plugin {}: {}", name, e);
+                            warn!("Failed to load plugin {}: {}", key, e);
                         }
                     }
                 }
             }
         }
 
-        // Load built-in plugins.
-        self.load_builtin_plugins();
+        // Load built-in plugins, each gated by its enabled flag so the config
+        // toggle actually controls what runs (previously every built-in loaded
+        // unconditionally and the flag did nothing).
+        self.load_builtin_plugins(plugins_cfg);
         Ok(())
     }
 
-    fn load_builtin_plugins(&mut self) {
-        // Built-in plugin sources, embedded at compile time.
-        let builtins = [
-            ("auto_tune", include_str!("../../lua/auto_tune.lua")),
-            ("auto_backup", include_str!("../../lua/auto_backup.lua")),
-            ("auto_update", include_str!("../../lua/auto_update.lua")),
-            ("bt_tether", include_str!("../../lua/bt_tether.lua")),
-            ("cache", include_str!("../../lua/cache.lua")),
-            ("fix_services", include_str!("../../lua/fix_services.lua")),
-            ("gpio_buttons", include_str!("../../lua/gpio_buttons.lua")),
-            ("gps", include_str!("../../lua/gps.lua")),
-            ("grid", include_str!("../../lua/grid.lua")),
-            ("logtail", include_str!("../../lua/logtail.lua")),
-            ("memtemp", include_str!("../../lua/memtemp.lua")),
-            ("ohcapi", include_str!("../../lua/ohcapi.lua")),
-            ("pisugarx", include_str!("../../lua/pisugarx.lua")),
-            ("pwncrack", include_str!("../../lua/pwncrack.lua")),
-            ("session_stats", include_str!("../../lua/session_stats.lua")),
-            ("ups_lite", include_str!("../../lua/ups_lite.lua")),
-            ("webcfg", include_str!("../../lua/webcfg.lua")),
-            ("wigle", include_str!("../../lua/wigle.lua")),
-            ("wpa_sec", include_str!("../../lua/wpa_sec.lua")),
-        ];
-
-        for (name, code) in builtins {
+    fn load_builtin_plugins(
+        &mut self,
+        plugins_cfg: &HashMap<String, config::schema::PluginConfig>,
+    ) {
+        for &(name, code) in Self::BUILTINS {
+            if !Self::plugin_enabled(plugins_cfg, name) {
+                continue;
+            }
             match LuaPlugin::new(name, code) {
                 Ok(plugin) => {
                     self.plugins.entry(name.to_string()).or_insert(plugin);
@@ -189,17 +223,30 @@ impl PluginManager {
     }
 
     /// Invoke the `on_handshake` hook of every loaded plugin with the
-    /// real captured BSSID/SSID/file path as Lua globals -- previously
+    /// real captured BSSID/SSID/file paths as Lua globals -- previously
     /// plugins had no way to react to an actual handshake capture at
     /// all (`wpa_sec`/`wigle`/`grid`/`pwncrack` all need this to upload
     /// or log the real file, not just observe the epoch counter go up).
-    pub async fn on_handshake(&self, bssid: &str, ssid: &str, path: &str) -> Result<()> {
+    ///
+    /// `hashcat_path` is the validated `.hc22000` hash file; `pcap_path` is
+    /// the raw `.pcapng` capture. Both are exposed as globals
+    /// (`handshake_path` / `handshake_pcap_path`) because different services
+    /// want different formats -- wpa-sec/OnlineHashCrack want the raw pcap,
+    /// local hashcat wants the `.hc22000`.
+    pub async fn on_handshake(
+        &self,
+        bssid: &str,
+        ssid: &str,
+        hashcat_path: &str,
+        pcap_path: &str,
+    ) -> Result<()> {
         for (name, plugin) in &self.plugins {
             let globals = plugin.lua.globals();
             if let Err(e) = globals
                 .set("handshake_bssid", bssid)
                 .and_then(|_| globals.set("handshake_ssid", ssid))
-                .and_then(|_| globals.set("handshake_path", path))
+                .and_then(|_| globals.set("handshake_path", hashcat_path))
+                .and_then(|_| globals.set("handshake_pcap_path", pcap_path))
             {
                 warn!("Plugin {} on_handshake context error: {}", name, e);
                 continue;

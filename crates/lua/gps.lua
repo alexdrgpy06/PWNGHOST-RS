@@ -1,10 +1,8 @@
 -- gps plugin: reads live GPS fixes from gpsd for wardriving
 -- pwncore::Handshake.gps / GpsData already exist but nothing in
--- crates/agent or crates/angryoxide currently populates them. AngryOxide
--- is already started with `--gpsd 127.0.0.1:2947` (see
--- crates/angryoxide/src/args.rs) for its own use, so a gpsd instance is
--- expected to already be listening there; this plugin piggybacks on that
--- same instance instead of starting a second one.
+-- crates/agent currently populates them. This plugin reads fixes from a
+-- gpsd instance expected to be listening on 127.0.0.1:2947 (the standard
+-- gpsd port) and attaches them, rather than starting a second gpsd.
 --
 -- Stock Lua 5.4 stdlib has no raw TCP socket support, so gpsd's
 -- JSON-over-TCP protocol can't be spoken directly from Lua -- `gpspipe`

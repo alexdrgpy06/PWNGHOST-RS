@@ -27,6 +27,35 @@ local function trim(s)
   return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+-- Minimal JSON string escaping (no library available in stock Lua 5.4),
+-- matching the hand-rolled JSON convention already used by session_stats.lua.
+local function json_escape(s)
+  if not s then
+    return ""
+  end
+  return (s:gsub('[\\"\n\r\t]', {
+    ["\\"] = "\\\\",
+    ['"'] = '\\"',
+    ["\n"] = "\\n",
+    ["\r"] = "\\r",
+    ["\t"] = "\\t",
+  }))
+end
+
+-- POSIX shell single-quote escaping for values interpolated into
+-- os.execute()/io.popen() command strings below. Wrapping in single
+-- quotes and escaping any embedded single quote (close-quote,
+-- backslash-escaped-quote, reopen-quote) is the standard safe pattern --
+-- unlike json_escape above (which only escapes for JSON string context),
+-- this is required wherever a value crosses into an actual shell
+-- command, since handshake_path/wordlist can in principle contain shell
+-- metacharacters ($, `, ;, etc.) that a naive "%s" interpolation
+-- wouldn't neutralize.
+local function shell_quote(s)
+  s = s or ""
+  return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
 local function find_hashcat()
   local p = io.popen("command -v hashcat 2>/dev/null")
   if not p then
@@ -99,7 +128,7 @@ function on_handshake()
     return true
   end
 
-  os.execute('mkdir -p "' .. OUT_DIR .. '"')
+  os.execute('mkdir -p ' .. shell_quote(OUT_DIR))
   local safe_bssid = (handshake_bssid or "unknown"):gsub("[^%w]", "_")
   local out_file = OUT_DIR .. "/" .. safe_bssid .. ".cracked"
   os.remove(out_file)
@@ -107,12 +136,17 @@ function on_handshake()
   -- --potfile-disable + our own -o scopes the result to this one
   -- handshake instead of hashcat's shared global potfile; `timeout` bounds
   -- a worst-case dictionary run so one slow/large wordlist can't stall the
-  -- epoch loop indefinitely.
+  -- epoch loop indefinitely. Every interpolated value is shell_quote()'d,
+  -- not just naively wrapped in "%s" -- handshake_path/wordlist ultimately
+  -- trace back to a capture filename / user-edited config.toml value, and
+  -- neither is guaranteed free of shell metacharacters.
   local cmd = string.format(
-    'timeout %d %s -m 22000 -a 0 "%s" "%s" --potfile-disable -o "%s" --force >/dev/null 2>&1',
-    TIMEOUT_SECS, hashcat_bin, handshake_path, wordlist, out_file
+    'timeout %d %s -m 22000 -a 0 %s %s --potfile-disable -o %s --force >/dev/null 2>&1',
+    TIMEOUT_SECS, shell_quote(hashcat_bin), shell_quote(handshake_path), shell_quote(wordlist), shell_quote(out_file)
   )
+  local started = os.time()
   os.execute(cmd)
+  local duration = os.time() - started
 
   local f = io.open(out_file, "r")
   local line = f and f:read("*l")
@@ -126,6 +160,32 @@ function on_handshake()
       "pwncrack: CRACKED " .. tostring(handshake_ssid) .. " (" .. tostring(handshake_bssid) ..
       ") password=" .. tostring(password) .. "\n"
     )
+
+    -- Also write a small, structured JSON summary alongside hashcat's raw
+    -- potfile-format `.cracked` file, so the web UI can show cracked
+    -- passwords without needing to parse hashcat's -m 22000 hash format
+    -- (real BSSID/ESSID are already known here from the handshake hooks;
+    -- re-deriving them from the potfile line would be redundant parsing).
+    -- Same atomic write-then-rename convention as session_stats.lua.
+    -- Richer metadata so the web UI can show HOW it was cracked, not just
+    -- the result (C4b). `hash_type`/`attack_mode` are fixed by the hashcat
+    -- invocation above (-m 22000 WPA, -a 0 straight dictionary).
+    local wl_name = (wordlist or ""):match("([^/]+)$") or tostring(wordlist)
+    local json = string.format(
+      '{"bssid":"%s","ssid":"%s","password":"%s","cracked_at":%d,' ..
+      '"source":"local","duration_secs":%d,"attack_mode":"straight (-a 0)",' ..
+      '"wordlist":"%s","hash_type":"WPA (22000)"}',
+      json_escape(handshake_bssid), json_escape(handshake_ssid),
+      json_escape(password), os.time(), duration, json_escape(wl_name)
+    )
+    local json_path = OUT_DIR .. "/" .. safe_bssid .. ".json"
+    local tmp_path = json_path .. ".tmp"
+    local jf = io.open(tmp_path, "w")
+    if jf then
+      jf:write(json)
+      jf:close()
+      os.rename(tmp_path, json_path)
+    end
   else
     io.stderr:write(
       "pwncrack: no crack within " .. TIMEOUT_SECS .. "s for " ..

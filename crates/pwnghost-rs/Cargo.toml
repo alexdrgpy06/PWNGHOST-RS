@@ -15,7 +15,7 @@ pwncore = { path = "../pwncore" }
 config = { path = "../config" }
 agent = { path = "../agent" }
 fw-patcher = { path = "../fw-patcher" }
-angryoxide = { path = "../angryoxide" }
+bettercap = { path = "../bettercap" }
 radio = { path = "../radio" }
 rl-agent = { path = "../rl-agent" }
 ui = { path = "../ui" }

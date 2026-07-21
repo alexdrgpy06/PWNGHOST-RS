@@ -1,6 +1,6 @@
 # Export the SD image after stage5 completes, so the exported rootfs
-# contains every PWNGHOST-RS customization (nexmon firmware, AngryOxide,
-# the pwnghost-rs binary, config, and the runtime overlay). No "-lite"
+# contains every PWNGHOST-RS customization (nexmon firmware, the
+# pwnghost-rs binary, config, and the runtime overlay). No "-lite"
 # suffix and no earlier stage exports one: this is the only image shipped.
 IMG_SUFFIX=""
 if [ "${USE_QEMU}" = "1" ]; then

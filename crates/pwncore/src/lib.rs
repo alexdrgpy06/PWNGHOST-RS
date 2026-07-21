@@ -288,38 +288,40 @@ pub enum Mood {
 }
 
 impl Mood {
-    /// Get kaomoji faces for this mood
-    pub fn faces(&self) -> &'static [&'static str] {
+    /// The canonical kaomoji face for this mood.
+    ///
+    /// **Single source of truth** for faces across the whole workspace --
+    /// `agent::faces::face_for_mood` and `ui/display`'s `face_for_mood` both
+    /// delegate here. Values are verified line-for-line against real
+    /// jayofelony/pwnagotchi's `pwnagotchi/ui/faces.py`: exactly one face per
+    /// mood, not randomized. Upstream `view.py` only ever passes a single
+    /// face constant to `set('face', ...)`, so the per-mood "variants" this
+    /// table used to carry were never an upstream behavior (and some
+    /// fabricated alternates even reused a different mood's real face).
+    pub fn face(&self) -> &'static str {
         match self {
-            Mood::LookR => &["( ⚆_⚆)", "(☉_☉ )"],
-            Mood::LookL => &["(☉_☉ )", "( ⚆_⚆)"],
-            Mood::LookRHappy => &["( ◕‿◕)", "( ≧◡≦)"],
-            Mood::LookLHappy => &["(◕‿◕ )", "(≧◡≦ )"],
-            Mood::Sleep => &["(⇀‿‿↼)", "(≖‿‿≖)", "(－_－)"],
-            Mood::Awake => &["(◕‿‿◕)"],
-            Mood::Bored => &["(-__-)", "(—__—)"],
-            Mood::Intense => &["(°▃▃°)", "(°ロ°)"],
-            Mood::Cool => &["(⌐■_■)", "(单__单)"],
-            Mood::Happy => &["(•‿‿•)", "(^‿‿^)", "(^◡◡^)"],
-            Mood::Excited => &["(ᵔ◡◡ᵔ)", "(✜‿‿✜)"],
-            Mood::Grateful => &["(^‿‿^)"],
-            Mood::Motivated => &["(☼‿‿☼)", "(★‿★)", "(•̀ᴗ•́)"],
-            Mood::Demotivated => &["(≖__≖)", "(￣ヘ￣)", "(¬､¬)"],
-            Mood::Smart => &["(✜‿‿✜)"],
-            Mood::Lonely => &["(ب__ب)", "(｡•́︿•̀｡)", "(︶︹︺)"],
-            Mood::Sad => &["(╥☁╥ )", "(╥﹏╥)", "(ಥ﹏ಥ)"],
-            Mood::Angry => &["(-_-')", "(⇀__⇀)", "(`___´)"],
-            Mood::Friend => &["(♥‿‿♥)", "(♡‿‿♡)", "(♥‿♥ )", "(♥ω♥ )"],
-            Mood::Broken => &["(☓‿‿☓)"],
-            Mood::Upload => &["(1__0)", "(1__1)", "(0__1)"],
+            Mood::LookR => "( ⚆_⚆)",
+            Mood::LookL => "(☉_☉ )",
+            Mood::LookRHappy => "( ◕‿◕)",
+            Mood::LookLHappy => "(◕‿◕ )",
+            Mood::Sleep => "(⇀‿‿↼)",
+            Mood::Awake => "(◕‿‿◕)",
+            Mood::Bored => "(-__-)",
+            Mood::Intense => "(°▃▃°)",
+            Mood::Cool => "(⌐■_■)",
+            Mood::Happy => "(•‿‿•)",
+            Mood::Excited => "(ᵔ◡◡ᵔ)",
+            Mood::Grateful => "(^‿‿^)",
+            Mood::Motivated => "(☼‿‿☼)",
+            Mood::Demotivated => "(≖__≖)",
+            Mood::Smart => "(✜‿‿✜)",
+            Mood::Lonely => "(ب__ب)",
+            Mood::Sad => "(╥☁╥ )",
+            Mood::Angry => "(-_-')",
+            Mood::Friend => "(♥‿‿♥)",
+            Mood::Broken => "(☓‿‿☓)",
+            Mood::Upload => "(1__0)",
         }
-    }
-
-    /// Get a random face for this mood
-    pub fn random_face(&self) -> &'static str {
-        let faces = self.faces();
-        let idx = rand::random::<usize>() % faces.len();
-        faces[idx]
     }
 }
 
@@ -466,10 +468,11 @@ mod tests {
     }
 
     #[test]
-    fn test_mood_faces() {
-        assert!(!Mood::Happy.faces().is_empty());
-        let face = Mood::Happy.random_face();
-        assert!(Mood::Happy.faces().contains(&face));
+    fn test_mood_face() {
+        // One canonical face per mood, matching upstream faces.py exactly.
+        assert_eq!(Mood::Happy.face(), "(•‿‿•)");
+        assert_eq!(Mood::Angry.face(), "(-_-')");
+        assert_eq!(Mood::Lonely.face(), "(ب__ب)");
     }
 
     #[test]

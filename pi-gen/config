@@ -10,8 +10,8 @@
 # --- Board / target-arch selection ---------------------------------------
 # Set by CI as an env var before invoking build.sh (see
 # .github/workflows/release.yml, matrix.board), or manually for a local
-# build. Drives which pre-built Rust artifact (stage4) and which AngryOxide
-# release tarball (stage4) get installed into the image.
+# build. Drives which pre-built Rust artifact (stage4) gets installed into
+# the image.
 #   pi-zero-w  -> Pi Zero W,  BCM2835, ARMv6 (arm1176jzf-s)
 #   pi-zero-2w -> Pi Zero 2W, BCM2710A1, ARMv7 (cortex-a53)
 export PWNGHOST_BOARD="${PWNGHOST_BOARD:-pi-zero-2w}"
@@ -19,20 +19,15 @@ export PWNGHOST_BOARD="${PWNGHOST_BOARD:-pi-zero-2w}"
 case "${PWNGHOST_BOARD}" in
 	pi-zero-w)
 		export RUST_TARGET_TRIPLE="arm-unknown-linux-gnueabihf"
-		export ANGRYOXIDE_ARCH="linux-arm-musl"
 		;;
 	pi-zero-2w)
 		export RUST_TARGET_TRIPLE="armv7-unknown-linux-gnueabihf"
-		export ANGRYOXIDE_ARCH="linux-armv7hf-musl"
 		;;
 	*)
 		echo "config: unknown PWNGHOST_BOARD='${PWNGHOST_BOARD}' (expected 'pi-zero-w' or 'pi-zero-2w')" >&2
 		exit 1
 		;;
 esac
-
-# Pinned AngryOxide release (Ragnt/AngryOxide). Bump deliberately.
-export ANGRYOXIDE_VERSION="${ANGRYOXIDE_VERSION:-v0.9.2}"
 
 # stage3 nexmon: build the BCM43436B0 (Pi Zero 2W chip) injection-firmware
 # patch. Default on; set to 0 if hardware validation reproduces the SDIO

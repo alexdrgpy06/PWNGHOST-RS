@@ -32,8 +32,8 @@ ip addr
 nmcli -f DEVICE,TYPE,STATE,CONNECTION device 2>/dev/null
 echo "--- Listening ports ---"
 ss -tlnp
-echo "--- AngryOxide ---"
-pgrep -a angryoxide || echo "angryoxide not running"
+echo "--- bettercap (capture backend) ---"
+pgrep -a bettercap || echo "bettercap not running"
 echo "--- Disk ---"
 df -h
 echo "=== End ==="

@@ -1,7 +1,12 @@
 //! Web server for PWNGHOST-RS
 
 use axum::extract::ws::WebSocketUpgrade;
-use axum::{extract::State, response::Html, routing::get, Router};
+use axum::{
+    extract::State,
+    response::Html,
+    routing::{get, post},
+    Router,
+};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
@@ -9,7 +14,8 @@ use tower_http::services::ServeDir;
 use tracing::info;
 
 use crate::api::{
-    get_config, get_handshakes, get_peers, get_session, get_status, get_ui_frame, update_config,
+    get_config, get_cracked, get_handshakes, get_peers, get_plugins, get_session, get_status,
+    get_ui_frame, get_wpa_sec_cracked, toggle_plugin, update_config, update_plugin_options,
     AppState,
 };
 
@@ -21,6 +27,11 @@ pub fn create_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/api/config", get(get_config).post(update_config))
         .route("/api/peers", get(get_peers))
         .route("/api/handshakes", get(get_handshakes))
+        .route("/api/cracked", get(get_cracked))
+        .route("/api/wpa-sec/cracked", get(get_wpa_sec_cracked))
+        .route("/api/plugins", get(get_plugins))
+        .route("/api/plugins/:name/toggle", post(toggle_plugin))
+        .route("/api/plugins/:name/options", post(update_plugin_options))
         // Live e-ink frame as PNG, polled ~1s by the dashboard -- the same
         // "live view" real pwnagotchi serves at `/ui`.
         .route("/ui", get(get_ui_frame))

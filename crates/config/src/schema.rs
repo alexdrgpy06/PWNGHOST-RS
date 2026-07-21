@@ -1,4 +1,4 @@
-//! Configuration schema for PWNGHOST-RS
+﻿//! Configuration schema for PWNGHOST-RS
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,7 @@ pub struct PwnConfig {
     pub fs: FsConfig,
 
     #[serde(default)]
-    pub oxigotchi: OxigotchiConfig,
+    pub agent: AgentConfig,
 
     #[serde(default)]
     pub plugins: HashMap<String, PluginConfig>,
@@ -38,15 +38,20 @@ impl Default for PwnConfig {
             ui: UiConfig::default(),
             bettercap: BettercapConfig::default(),
             fs: FsConfig::default(),
-            oxigotchi: OxigotchiConfig::default(),
+            agent: AgentConfig::default(),
             plugins: default_plugins(),
         }
     }
 }
 
-/// Runtime/loop tuning for the agent.
+/// Runtime/loop tuning for the agent -- this is **our own** config section,
+/// not related to the sibling `oxigotchi` Rust project (studied only as
+/// prior-art reference, never integrated; see `REWORK_PLAN.md`). It was
+/// previously misnamed `OxigotchiConfig`/`[oxigotchi]`, which read as
+/// leftover config from a project this codebase doesn't use -- renamed for
+/// clarity, no behavior change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OxigotchiConfig {
+pub struct AgentConfig {
     /// Duration of one agent epoch, in seconds.
     #[serde(default = "default_epoch_duration")]
     pub epoch_duration: u64,
@@ -56,7 +61,7 @@ fn default_epoch_duration() -> u64 {
     15
 }
 
-impl Default for OxigotchiConfig {
+impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             epoch_duration: default_epoch_duration(),
@@ -95,28 +100,17 @@ impl PwnConfig {
 
 fn default_plugins() -> HashMap<String, PluginConfig> {
     let mut plugins = HashMap::new();
+    // Safe-by-default, no external accounts/credentials or optional
+    // hardware required: on out of the box.
     for name in [
         "auto_tune",
         "auto_backup",
         "auto_update",
-        "bt_tether",
         "cache",
         "fix_services",
-        "gpio_buttons",
-        "gps",
         "grid",
-        "logtail",
-        "memtemp",
-        "ohcapi",
-        "pisugarx",
-        "pwncrack",
-        "session_stats",
-        "ups_lite",
         "webcfg",
         "pwnstore_ui",
-        "webgpsmap",
-        "wigle",
-        "wpa_sec",
     ] {
         plugins.insert(
             name.to_string(),
@@ -126,6 +120,55 @@ fn default_plugins() -> HashMap<String, PluginConfig> {
             },
         );
     }
+    // Opt-in: either uploads to a third-party service and needs a
+    // credential the user hasn't set yet (wpa_sec, wigle, ohcapi), or
+    // depends on optional hardware/tooling not every install has
+    // (bt_tether, gpio_buttons, gps, memtemp, pisugarx, ups_lite,
+    // webgpsmap), or is otherwise not something every user wants running
+    // by default (logtail, pwncrack, session_stats). **Previously this
+    // whole function set every plugin to `enabled: true` unconditionally,
+    // silently shipping upload plugins active with no credential set and
+    // every optional-hardware plugin polling for hardware that usually
+    // isn't there -- this list is what `defaults.toml` already documented
+    // as the intended defaults, which this function had drifted out of
+    // sync with (that file itself is reference documentation only; it is
+    // never parsed at runtime -- `PwnConfig::default()` here is the real
+    // source of truth).**
+    for name in [
+        "bt_tether",
+        "gps",
+        "logtail",
+        "memtemp",
+        "ohcapi",
+        "pisugarx",
+        "pwncrack",
+        "session_stats",
+        "ups_lite",
+        "webgpsmap",
+        "wigle",
+        "wpa_sec",
+    ] {
+        plugins.insert(
+            name.to_string(),
+            PluginConfig {
+                enabled: false,
+                options: HashMap::new(),
+            },
+        );
+    }
+    // gpio_buttons: opt-in (needs a physical button wired up), with the
+    // PiSugar S button's GPIO3 as the default pin -- see gpio_buttons.lua's
+    // doc comment for the hardware caveat (shares I2C1 SCL).
+    let mut gpio_buttons_options = HashMap::new();
+    gpio_buttons_options.insert("pin".to_string(), serde_json::Value::from(3));
+    gpio_buttons_options.insert("long_press_secs".to_string(), serde_json::Value::from(3));
+    plugins.insert(
+        "gpio_buttons".to_string(),
+        PluginConfig {
+            enabled: false,
+            options: gpio_buttons_options,
+        },
+    );
     plugins
 }
 
@@ -376,10 +419,6 @@ pub struct PersonalityConfig {
 
     #[serde(default = "default_frame_padding_min")]
     pub frame_padding_min_bytes: usize,
-
-    // Faces
-    #[serde(default)]
-    pub faces: FaceConfig,
 }
 
 fn default_bored_epochs() -> u64 {
@@ -456,8 +495,8 @@ impl Default for PersonalityConfig {
             max_recon_time: default_max_recon(),
             hop_recon_time: default_hop_recon(),
             // Real pwnagotchi's core behavior: actively deauth discovered
-            // APs to force handshakes. AngryOxide does the deauthing
-            // autonomously unless told --disable-deauth.
+            // APs to force handshakes. When enabled, the agent issues
+            // deauth/assoc against targeted APs via the bettercap backend.
             deauth: true,
             associate: true,
             min_rssi: default_min_rssi(),
@@ -465,7 +504,6 @@ impl Default for PersonalityConfig {
             position_y: 34,
             frame_padding: default_frame_padding(),
             frame_padding_min_bytes: default_frame_padding_min(),
-            faces: FaceConfig::default(),
         }
     }
 }
@@ -500,121 +538,6 @@ impl PersonalityConfig {
             return 0;
         }
         base - elapsed
-    }
-}
-
-/// Face configuration - kaomoji strings per mood (matches pwnagotchi personality.toml)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FaceConfig {
-    #[serde(default)]
-    pub look_r: Vec<String>,
-    #[serde(default)]
-    pub look_l: Vec<String>,
-    #[serde(default)]
-    pub look_r_happy: Vec<String>,
-    #[serde(default)]
-    pub look_l_happy: Vec<String>,
-    #[serde(default)]
-    pub sleep: Vec<String>,
-    #[serde(default)]
-    pub awake: Vec<String>,
-    #[serde(default)]
-    pub bored: Vec<String>,
-    #[serde(default)]
-    pub intense: Vec<String>,
-    #[serde(default)]
-    pub cool: Vec<String>,
-    #[serde(default)]
-    pub happy: Vec<String>,
-    #[serde(default)]
-    pub excited: Vec<String>,
-    #[serde(default)]
-    pub grateful: Vec<String>,
-    #[serde(default)]
-    pub motivated: Vec<String>,
-    #[serde(default)]
-    pub demotivated: Vec<String>,
-    #[serde(default)]
-    pub smart: Vec<String>,
-    #[serde(default)]
-    pub lonely: Vec<String>,
-    #[serde(default)]
-    pub sad: Vec<String>,
-    #[serde(default)]
-    pub angry: Vec<String>,
-    #[serde(default)]
-    pub friend: Vec<String>,
-    #[serde(default)]
-    pub broken: Vec<String>,
-    #[serde(default)]
-    pub upload: Vec<String>,
-    #[serde(default)]
-    pub png: bool,
-}
-
-impl Default for FaceConfig {
-    fn default() -> Self {
-        Self {
-            look_r: vec!["( ⚆_⚆)".to_string()],
-            look_l: vec!["(☉_☉ )".to_string()],
-            look_r_happy: vec!["( ◕‿◕)".to_string(), "( ≧◡≦)".to_string()],
-            look_l_happy: vec!["(◕‿◕ )".to_string(), "(≧◡≦ )".to_string()],
-            sleep: vec![
-                "(⇀‿‿↼)".to_string(),
-                "(≖‿‿≖)".to_string(),
-                "(－_－)".to_string(),
-            ],
-            awake: vec!["(◕‿‿◕)".to_string()],
-            bored: vec!["(-__-)".to_string(), "(—__—)".to_string()],
-            intense: vec!["(°▃▃°)".to_string(), "(°ロ°)".to_string()],
-            cool: vec!["(⌐■_■)".to_string(), "(单__单)".to_string()],
-            happy: vec![
-                "(•‿‿•)".to_string(),
-                "(^‿‿^)".to_string(),
-                "(^◡◡^)".to_string(),
-            ],
-            excited: vec!["(ᵔ◡◡ᵔ)".to_string(), "(✜‿‿✜)".to_string()],
-            grateful: vec!["(^‿‿^)".to_string()],
-            motivated: vec![
-                "(☼‿‿☼)".to_string(),
-                "(★‿★)".to_string(),
-                "(•̀ᴗ•́)".to_string(),
-            ],
-            demotivated: vec![
-                "(≖__≖)".to_string(),
-                "(￣ヘ￣)".to_string(),
-                "(¬､¬)".to_string(),
-            ],
-            smart: vec!["(✜‿‿✜)".to_string()],
-            lonely: vec![
-                "(ب__ب)".to_string(),
-                "(｡•́︿•̀｡)".to_string(),
-                "(︶︹︺)".to_string(),
-            ],
-            sad: vec![
-                "(╥☁╥ )".to_string(),
-                "(╥﹏╥)".to_string(),
-                "(ಥ﹏ಥ)".to_string(),
-            ],
-            angry: vec![
-                "(-_-')".to_string(),
-                "(⇀__⇀)".to_string(),
-                "(`___´)".to_string(),
-            ],
-            friend: vec![
-                "(♥‿‿♥)".to_string(),
-                "(♡‿‿♡)".to_string(),
-                "(♥‿♥ )".to_string(),
-                "(♥ω♥ )".to_string(),
-            ],
-            broken: vec!["(☓‿‿☓)".to_string()],
-            upload: vec![
-                "(1__0)".to_string(),
-                "(1__1)".to_string(),
-                "(0__1)".to_string(),
-            ],
-            png: false,
-        }
     }
 }
 
@@ -801,7 +724,14 @@ impl Default for FacesConfig {
         Self {
             png: true,
             position_x: 0,
-            position_y: 16,
+            // Matches real pwnagotchi's `ui.faces.position_y` default
+            // (pwnagotchi/ui/view.py: face position comes directly from
+            // this config value, not the per-panel layout dict) --
+            // confirmed against a real jayofelony v2.8.9 device's
+            // /usr/local/lib/python3.9/dist-packages/pwnagotchi/ui/view.py.
+            // Previously 16, which rendered the face noticeably higher
+            // than the original.
+            position_y: 34,
             face_paths: HashMap::new(),
         }
     }
@@ -991,5 +921,38 @@ mod tests {
         assert!(config.plugins.contains_key("auto_tune"));
         assert!(config.plugins.contains_key("webcfg"));
         assert!(config.plugins["auto_tune"].enabled);
+    }
+
+    #[test]
+    fn test_default_plugins_opt_in_ones_are_off() {
+        // Regression: `default_plugins()` used to enable every plugin
+        // unconditionally, silently shipping upload plugins (wpa_sec/
+        // wigle/ohcapi) active with no credential set, and every
+        // optional-hardware plugin polling for hardware most installs
+        // don't have.
+        let config = PwnConfig::default();
+        for name in [
+            "wpa_sec",
+            "wigle",
+            "ohcapi",
+            "bt_tether",
+            "gpio_buttons",
+            "gps",
+            "pisugarx",
+            "ups_lite",
+        ] {
+            assert!(
+                !config.plugins[name].enabled,
+                "{name} should default to disabled (opt-in)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_default_gpio_buttons_targets_pisugar_s_button() {
+        let config = PwnConfig::default();
+        let opts = &config.plugins["gpio_buttons"].options;
+        assert_eq!(opts["pin"], 3);
+        assert_eq!(opts["long_press_secs"], 3);
     }
 }

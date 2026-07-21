@@ -50,7 +50,17 @@ impl CaptureManager {
         let mut entries = fs::read_dir(&self.staging_dir).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "pcapng") {
+            // bettercap (Phase 1's capture backend) writes real PCAPNG-format
+            // bytes (`gopacket/pcapgo.NewNgWriter`, confirmed directly from
+            // its Go source) but names the file `<ap>.pcap`, not `.pcapng` --
+            // a naming quirk, not a format difference (`hcxpcapngtool` sniffs
+            // the format from content regardless of extension). Accept both
+            // extensions so bettercap's real per-AP handshake files aren't
+            // silently skipped by an extension check written for AngryOxide.
+            if path
+                .extension()
+                .is_some_and(|e| e == "pcapng" || e == "pcap")
+            {
                 let meta = entry.metadata().await?;
                 let modified = meta.modified().ok().and_then(|t| {
                     DateTime::<Utc>::from_timestamp(
@@ -249,6 +259,37 @@ mod tests {
 
         assert!(mgr.staging_dir.exists());
         assert!(mgr.final_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn test_scan_new_captures_accepts_pcap_and_pcapng() {
+        // bettercap (Phase 1's capture backend) writes real PCAPNG-format
+        // bytes but names files "<ap>.pcap", not ".pcapng" -- both must be
+        // picked up as capture candidates.
+        let tmp = TempDir::new().unwrap();
+        let staging = tmp.path().join("staging");
+        let final_dir = tmp.path().join("final");
+        let mgr = CaptureManager::new(staging.clone(), final_dir);
+        mgr.init().await.unwrap();
+
+        fs::write(staging.join("MyNetwork_aabbccddeeff.pcap"), b"pcapng-bytes")
+            .await
+            .unwrap();
+        fs::write(staging.join("legacy.pcapng"), b"pcapng-bytes")
+            .await
+            .unwrap();
+        fs::write(staging.join("not-a-capture.txt"), b"irrelevant")
+            .await
+            .unwrap();
+
+        let found = mgr.scan_new_captures().await.unwrap();
+        let names: Vec<String> = found
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert!(names.contains(&"MyNetwork_aabbccddeeff.pcap".to_string()));
+        assert!(names.contains(&"legacy.pcapng".to_string()));
+        assert_eq!(found.len(), 2, "expected exactly the two capture files, got {names:?}");
     }
 
     #[test]

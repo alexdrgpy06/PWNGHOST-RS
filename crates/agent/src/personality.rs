@@ -41,40 +41,10 @@ pub struct PersonalityConfig {
     pub position_y: i32,
     pub frame_padding: bool,
     pub frame_padding_min_bytes: usize,
-
-    // Faces
-    pub faces: FaceConfig,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FaceConfig {
-    pub look_r: Vec<String>,
-    pub look_l: Vec<String>,
-    pub look_r_happy: Vec<String>,
-    pub look_l_happy: Vec<String>,
-    pub sleep: Vec<String>,
-    pub awake: Vec<String>,
-    pub bored: Vec<String>,
-    pub intense: Vec<String>,
-    pub cool: Vec<String>,
-    pub happy: Vec<String>,
-    pub excited: Vec<String>,
-    pub grateful: Vec<String>,
-    pub motivated: Vec<String>,
-    pub demotivated: Vec<String>,
-    pub smart: Vec<String>,
-    pub lonely: Vec<String>,
-    pub sad: Vec<String>,
-    pub angry: Vec<String>,
-    pub friend: Vec<String>,
-    pub broken: Vec<String>,
-    pub upload: Vec<String>,
-    pub png: bool,
 }
 
 impl From<config::PersonalityConfig> for PersonalityConfig {
     fn from(c: config::PersonalityConfig) -> Self {
-        let f = c.faces;
         Self {
             bored_num_epochs: c.bored_num_epochs,
             sad_num_epochs: c.sad_num_epochs,
@@ -98,30 +68,6 @@ impl From<config::PersonalityConfig> for PersonalityConfig {
             position_y: c.position_y,
             frame_padding: c.frame_padding,
             frame_padding_min_bytes: c.frame_padding_min_bytes,
-            faces: FaceConfig {
-                look_r: f.look_r,
-                look_l: f.look_l,
-                look_r_happy: f.look_r_happy,
-                look_l_happy: f.look_l_happy,
-                sleep: f.sleep,
-                awake: f.awake,
-                bored: f.bored,
-                intense: f.intense,
-                cool: f.cool,
-                happy: f.happy,
-                excited: f.excited,
-                grateful: f.grateful,
-                motivated: f.motivated,
-                demotivated: f.demotivated,
-                smart: f.smart,
-                lonely: f.lonely,
-                sad: f.sad,
-                angry: f.angry,
-                friend: f.friend,
-                broken: f.broken,
-                upload: f.upload,
-                png: f.png,
-            },
         }
     }
 }
@@ -151,73 +97,6 @@ impl Default for PersonalityConfig {
             position_y: 34,
             frame_padding: true,
             frame_padding_min_bytes: 650,
-            faces: FaceConfig::default(),
-        }
-    }
-}
-
-impl Default for FaceConfig {
-    fn default() -> Self {
-        Self {
-            look_r: vec!["( ⚆_⚆)".to_string()],
-            look_l: vec!["(☉_☉ )".to_string()],
-            look_r_happy: vec!["( ◕‿◕)".to_string(), "( ≧◡≦)".to_string()],
-            look_l_happy: vec!["(◕‿◕ )".to_string(), "(≧◡≦ )".to_string()],
-            sleep: vec![
-                "(⇀‿‿↼)".to_string(),
-                "(≖‿‿≖)".to_string(),
-                "(－_－)".to_string(),
-            ],
-            awake: vec!["(◕‿‿◕)".to_string()],
-            bored: vec!["(-__-)".to_string(), "(—__—)".to_string()],
-            intense: vec!["(°▃▃°)".to_string(), "(°ロ°)".to_string()],
-            cool: vec!["(⌐■_■)".to_string(), "(单__单)".to_string()],
-            happy: vec![
-                "(•‿‿•)".to_string(),
-                "(^‿‿^)".to_string(),
-                "(^◡◡^)".to_string(),
-            ],
-            excited: vec!["(ᵔ◡◡ᵔ)".to_string(), "(✜‿‿✜)".to_string()],
-            grateful: vec!["(^‿‿^)".to_string()],
-            motivated: vec![
-                "(☼‿‿☼)".to_string(),
-                "(★‿★)".to_string(),
-                "(•̀ᴗ•́)".to_string(),
-            ],
-            demotivated: vec![
-                "(≖__≖)".to_string(),
-                "(￣ヘ￣)".to_string(),
-                "(¬_¬)".to_string(),
-            ],
-            smart: vec!["(✜‿‿✜)".to_string()],
-            lonely: vec![
-                "(ب__ب)".to_string(),
-                "(｡•́︿•̀｡)".to_string(),
-                "(︶︹︺)".to_string(),
-            ],
-            sad: vec![
-                "(╥☁╥ )".to_string(),
-                "(╥﹏╥)".to_string(),
-                "(ಥ﹏ಥ)".to_string(),
-            ],
-            angry: vec![
-                "(-_-')".to_string(),
-                "(⇀__⇀)".to_string(),
-                "(`___´)".to_string(),
-            ],
-            friend: vec![
-                "(♥‿‿♥)".to_string(),
-                "(♡‿‿♡)".to_string(),
-                "(♥‿♥ )".to_string(),
-                "(♥ω♥ )".to_string(),
-            ],
-            broken: vec!["(☓‿‿☓)".to_string()],
-            upload: vec![
-                "(1__0)".to_string(),
-                "(1__1)".to_string(),
-                "(0__1)".to_string(),
-            ],
-            png: false,
         }
     }
 }
@@ -324,9 +203,9 @@ impl Personality {
         }
     }
 
-    /// Compute mood from epoch state
+    /// Compute mood from epoch state, matching real pwnagotchi's precedence.
     pub fn compute_mood(&self, epoch: &EpochState, peers: &[Peer]) -> Mood {
-        // If handshakes this epoch
+        // Handshakes captured this epoch trump everything.
         if epoch.handshakes_this_epoch > 0 {
             if epoch.handshakes_this_epoch > 1 {
                 return Mood::Excited;
@@ -337,28 +216,44 @@ impl Personality {
             return Mood::Happy;
         }
 
-        // If peers nearby
+        // Blind-epoch negative-mood cascade, checked worst-first *by
+        // threshold value* so every band is actually reachable. Real
+        // pwnagotchi's order is angry > lonely > sad > bored, matching
+        // `lonely_num_epochs` (150) sitting between `sad_num_epochs` (100)
+        // and `angry_num_epochs` (200). The old code checked sad *before*
+        // lonely, so with those defaults `Lonely` could never fire.
+        let negative = if epoch.blind_epochs >= self.config.angry_num_epochs {
+            Some(Mood::Angry)
+        } else if epoch.blind_epochs >= self.config.lonely_num_epochs {
+            Some(Mood::Lonely)
+        } else if epoch.blind_epochs >= self.config.sad_num_epochs {
+            Some(Mood::Sad)
+        } else if epoch.blind_epochs >= self.config.bored_num_epochs {
+            Some(Mood::Bored)
+        } else {
+            None
+        };
+
+        if let Some(neg) = negative {
+            // Peer-bond override: a unit with a support network nearby is
+            // grateful *instead of* the negative mood it would otherwise
+            // show (real pwnagotchi's `_has_support_network_for`). This
+            // replaces the old bug where any peer short-circuited straight
+            // to `Motivated` *before* the negative cascade even ran,
+            // hiding Bored/Sad/Lonely/Angry entirely whenever a peer was
+            // present.
+            if !peers.is_empty() {
+                return Mood::Grateful;
+            }
+            return neg;
+        }
+
+        // Not in a negative state: peers nearby are motivating; otherwise
+        // fall back to a mode-appropriate look.
         if !peers.is_empty() {
             return Mood::Motivated;
         }
 
-        // Check blind epochs
-        if epoch.blind_epochs > 0 {
-            if epoch.blind_epochs >= self.config.angry_num_epochs {
-                return Mood::Angry;
-            }
-            if epoch.blind_epochs >= self.config.sad_num_epochs {
-                return Mood::Sad;
-            }
-            if epoch.blind_epochs >= self.config.lonely_num_epochs {
-                return Mood::Lonely;
-            }
-            if epoch.blind_epochs >= self.config.bored_num_epochs {
-                return Mood::Bored;
-            }
-        }
-
-        // Based on mode
         match epoch.mode {
             AgentMode::Recon => Mood::LookR,
             AgentMode::Attack => Mood::Intense,
@@ -389,40 +284,6 @@ impl Personality {
         }
 
         base - elapsed
-    }
-
-    /// Get face for mood
-    pub fn get_face(&self, mood: Mood) -> String {
-        let faces = match mood {
-            Mood::LookR => &self.config.faces.look_r,
-            Mood::LookL => &self.config.faces.look_l,
-            Mood::LookRHappy => &self.config.faces.look_r_happy,
-            Mood::LookLHappy => &self.config.faces.look_l_happy,
-            Mood::Sleep => &self.config.faces.sleep,
-            Mood::Awake => &self.config.faces.awake,
-            Mood::Bored => &self.config.faces.bored,
-            Mood::Intense => &self.config.faces.intense,
-            Mood::Cool => &self.config.faces.cool,
-            Mood::Happy => &self.config.faces.happy,
-            Mood::Excited => &self.config.faces.excited,
-            Mood::Grateful => &self.config.faces.grateful,
-            Mood::Motivated => &self.config.faces.motivated,
-            Mood::Demotivated => &self.config.faces.demotivated,
-            Mood::Smart => &self.config.faces.smart,
-            Mood::Lonely => &self.config.faces.lonely,
-            Mood::Sad => &self.config.faces.sad,
-            Mood::Angry => &self.config.faces.angry,
-            Mood::Friend => &self.config.faces.friend,
-            Mood::Broken => &self.config.faces.broken,
-            Mood::Upload => &self.config.faces.upload,
-        };
-
-        if faces.is_empty() {
-            return mood.random_face().to_string();
-        }
-
-        let idx = rand::random::<usize>() % faces.len();
-        faces[idx].clone()
     }
 
     /// Get motivational phrase for mood
@@ -540,11 +401,52 @@ mod tests {
     }
 
     #[test]
-    fn test_face_selection() {
+    fn test_blind_cascade_lonely_is_reachable() {
+        // AC5 regression: with defaults bored=50 < sad=100 < lonely=150 <
+        // angry=200, each band must be reachable. The old worst-first order
+        // checked sad before lonely, so Lonely never fired.
         let p = Personality::default();
-        let face = p.get_face(Mood::Happy);
-        assert!(!face.is_empty());
-        assert!(face.contains("•") || face.contains("^"));
+        let mut epoch = EpochState::new(1, Channel::new(1).unwrap());
+
+        epoch.blind_epochs = 60;
+        assert_eq!(p.compute_mood(&epoch, &[]), Mood::Bored);
+        epoch.blind_epochs = 120;
+        assert_eq!(p.compute_mood(&epoch, &[]), Mood::Sad);
+        epoch.blind_epochs = 160;
+        assert_eq!(p.compute_mood(&epoch, &[]), Mood::Lonely);
+        epoch.blind_epochs = 220;
+        assert_eq!(p.compute_mood(&epoch, &[]), Mood::Angry);
+    }
+
+    #[test]
+    fn test_peers_do_not_short_circuit_negative_moods() {
+        // AC5 regression: a peer being present must NOT hide the negative
+        // cascade behind Motivated. Instead, the support network converts
+        // the negative mood to Grateful (real pwnagotchi behavior).
+        let p = Personality::default();
+        let mut epoch = EpochState::new(1, Channel::new(1).unwrap());
+        epoch.blind_epochs = 220; // would be Angry with no peers
+        let peers = [pwncore::Peer::new(
+            pwncore::MacAddr::default(),
+            "buddy".to_string(),
+            6,
+            -60,
+        )];
+        assert_eq!(p.compute_mood(&epoch, &peers), Mood::Grateful);
+    }
+
+    #[test]
+    fn test_peers_motivate_when_not_blind() {
+        // Peers present and no negative state -> Motivated.
+        let p = Personality::default();
+        let epoch = EpochState::new(1, Channel::new(1).unwrap());
+        let peers = [pwncore::Peer::new(
+            pwncore::MacAddr::default(),
+            "buddy".to_string(),
+            6,
+            -60,
+        )];
+        assert_eq!(p.compute_mood(&epoch, &peers), Mood::Motivated);
     }
 
     #[test]

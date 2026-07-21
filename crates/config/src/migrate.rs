@@ -199,90 +199,10 @@ pub fn migrate_config(legacy: LegacyConfig) -> super::schema::PwnConfig {
         config.personality.position_y = p.position_y.unwrap_or(34);
         config.personality.frame_padding = p.frame_padding.unwrap_or(true);
         config.personality.frame_padding_min_bytes = p.frame_padding_min_bytes.unwrap_or(650);
-
-        // Migrate faces
-        let defaults = super::schema::FaceConfig::default();
-        config.personality.faces = super::schema::FaceConfig {
-            look_r: p.look_r.unwrap_or(defaults.look_r),
-            look_l: p.look_l.unwrap_or(defaults.look_l),
-            look_r_happy: p.look_r_happy.unwrap_or(defaults.look_r_happy),
-            look_l_happy: p.look_l_happy.unwrap_or(defaults.look_l_happy),
-            sleep: p.sleep.unwrap_or(defaults.sleep),
-            awake: p.awake.unwrap_or(defaults.awake),
-            bored: p
-                .bored
-                .unwrap_or_else(|| vec!["(-__-)".to_string(), "(—__—)".to_string()]),
-            intense: p
-                .intense
-                .unwrap_or_else(|| vec!["(°▃▃°)".to_string(), "(°ロ°)".to_string()]),
-            cool: p
-                .cool
-                .unwrap_or_else(|| vec!["(⌐■_■)".to_string(), "(단__단)".to_string()]),
-            happy: p.happy.unwrap_or_else(|| {
-                vec![
-                    "(•‿‿•)".to_string(),
-                    "(^‿‿^)".to_string(),
-                    "(^◡◡^)".to_string(),
-                ]
-            }),
-            excited: p
-                .excited
-                .unwrap_or_else(|| vec!["(ᵔ◡◡ᵔ)".to_string(), "(✜‿‿✜)".to_string()]),
-            grateful: p.grateful.unwrap_or_else(|| vec!["(^‿‿^)".to_string()]),
-            motivated: p.motivated.unwrap_or_else(|| {
-                vec![
-                    "(☼‿‿☼)".to_string(),
-                    "(★‿★)".to_string(),
-                    "(•̀ᴗ•́)".to_string(),
-                ]
-            }),
-            demotivated: p.demotivated.unwrap_or_else(|| {
-                vec![
-                    "(≖__≖)".to_string(),
-                    "(￣ヘ￣)".to_string(),
-                    "(¬_¬)".to_string(),
-                ]
-            }),
-            smart: p.smart.unwrap_or_else(|| vec!["(✜‿‿✜)".to_string()]),
-            lonely: p.lonely.unwrap_or_else(|| {
-                vec![
-                    "(ب__ب)".to_string(),
-                    "(｡•́︿•̀｡)".to_string(),
-                    "(︶︹︺)".to_string(),
-                ]
-            }),
-            sad: p.sad.unwrap_or_else(|| {
-                vec![
-                    "(╥☁╥ )".to_string(),
-                    "(╥﹏╥)".to_string(),
-                    "(ಥ﹏ಥ)".to_string(),
-                ]
-            }),
-            angry: p.angry.unwrap_or_else(|| {
-                vec![
-                    "(-_-')".to_string(),
-                    "(⇀__⇀)".to_string(),
-                    "(`___´)".to_string(),
-                ]
-            }),
-            friend: p.friend.unwrap_or_else(|| {
-                vec![
-                    "(♥‿‿♥)".to_string(),
-                    "(♡‿‿♡)".to_string(),
-                    "(♥‿♥ )".to_string(),
-                    "(♥ω♥ )".to_string(),
-                ]
-            }),
-            broken: p.broken.unwrap_or_else(|| vec!["(☓‿‿☓)".to_string()]),
-            upload: p.upload.unwrap_or_else(|| {
-                vec![
-                    "(1__0)".to_string(),
-                    "(1__1)".to_string(),
-                    "(0__1)".to_string(),
-                ]
-            }),
-            png: p.png.unwrap_or(false),
-        };
+        // Per-mood face overrides are no longer part of our config: faces come
+        // from the single canonical table in `pwncore::Mood::face()`, verified
+        // against upstream faces.py. Any legacy `look_r`/`sleep`/... keys in an
+        // old personality.toml are accepted and ignored.
     }
 
     // Migrate UI
@@ -314,7 +234,7 @@ pub fn migrate_config(legacy: LegacyConfig) -> super::schema::PwnConfig {
         if let Some(faces) = ui.faces {
             config.ui.faces.png = faces.png.unwrap_or(true);
             config.ui.faces.position_x = faces.position_x.unwrap_or(0);
-            config.ui.faces.position_y = faces.position_y.unwrap_or(16);
+            config.ui.faces.position_y = faces.position_y.unwrap_or(34);
         }
     }
 

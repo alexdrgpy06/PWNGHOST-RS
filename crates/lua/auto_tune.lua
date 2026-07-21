@@ -2,17 +2,12 @@
 -- Hooks are optional globals invoked by the agent's plugin manager.
 -- Available globals when a hook runs: `epoch` (number), `status_json` (string).
 --
--- Real steering is not possible today: AngryOxide is spawned exactly once
--- at agent startup (crates/angryoxide/src/spawn.rs) with a fixed set of
--- CLI args built from `AngryOxideConfig` (crates/angryoxide/src/args.rs,
--- e.g. `--dwell`, `-r`/rate) baked in before the process starts, and it
--- manages its own channel hopping internally over netlink from then on --
--- there is no IPC/socket/signal this plugin (or anything else in the Rust
--- side) uses to push new timing into an already-running AO process. A
--- crash-triggered respawn (see spawn.rs's monitor loop) reuses the same
--- original config, not a freshly recomputed one. So this plugin only
--- observes and logs a diagnostic signal; it does not, and cannot today,
--- change anything live. A future version could feed this signal into
+-- This plugin only observes and logs a diagnostic timing signal; it does
+-- not change recon/attack timing live. The agent's own main loop drives
+-- the bettercap capture backend directly (channel hops via
+-- `wifi.recon.channel`, recon timing) -- this Lua plugin has no IPC path
+-- to push new timing into a running session. A future version could feed
+-- this signal into
 -- `config.toml`'s `[personality] min_recon_time/max_recon_time/
 -- hop_recon_time` for the *next* restart, but that wiring doesn't exist
 -- yet either.

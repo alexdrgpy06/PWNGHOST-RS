@@ -12,9 +12,10 @@
 # enables frame injection / deauth) and keep the stock brcmfmac driver,
 # which already supports monitor mode via `iw`/netlink on kernel 6.x. This
 # deliberately avoids building/replacing the kernel module, so there is no
-# kernel-version / vermagic matching to get wrong. AngryOxide (installed in
-# stage4) manages monitor mode itself via netlink at runtime - this stage
-# only needs to get the right firmware blobs onto the image.
+# kernel-version / vermagic matching to get wrong. Monitor mode is brought
+# up via `monstart`/`iw` (the base jayofelony image's helper) and bettercap
+# points at the resulting wlan0mon - this stage only needs to get the right
+# firmware blobs onto the image.
 #
 # Chip coverage:
 #   bcm43430a1  - Pi Zero W, and older Pi Zero 2 W board revisions.

@@ -1,7 +1,6 @@
 //! PWNGHOST-RS Main Binary
 
 use agent::Agent;
-use angryoxide::init as init_angryoxide;
 use clap::Parser;
 use config::load_config;
 use fw_patcher::apply_on_first_boot;
@@ -253,7 +252,48 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stdout.and(non_blocking_file))
         .init();
 
+    // With the release profile now panic="unwind" (not "abort" -- see
+    // Cargo.toml's comment), a panic in a spawn_blocking/spawned task
+    // unwinds into a catchable JoinError instead of killing the process,
+    // but by default still prints nothing but a bare Rust panic message
+    // to stderr, which StandardOutput=journal captures separately from
+    // our own tracing-formatted lines. Route it through tracing::error!
+    // too so a panic shows up structured, correlated with the rest of
+    // the log, and searchable the same way any other error is -- this is
+    // what a bare SIGABRT (the old panic="abort" behavior) could never
+    // give us.
+    std::panic::set_hook(Box::new(|panic_info| {
+        let location = panic_info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "<unknown location>".to_string());
+        let payload = panic_info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| {
+                panic_info
+                    .payload()
+                    .downcast_ref::<String>()
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| "<non-string panic payload>".to_string());
+        tracing::error!(target: "panic", %location, %payload, "panic occurred");
+    }));
+
     info!("Starting PWNGHOST-RS v{}", env!("CARGO_PKG_VERSION"));
+
+    // Persistent unit identity (Workstream D1): generated once, on first
+    // boot, and reused forever after -- gives this unit a stable
+    // fingerprint independent of its MAC address, and something a future
+    // grid/mesh integration can build real identity on top of (see
+    // `agent::identity`'s doc comment). Not yet consumed by anything else
+    // in this build; logging it is the visible, testable part of "stable
+    // across reboots" today.
+    match agent::Identity::load_or_generate("/var/lib/pwnghost/identity.key").await {
+        Ok(identity) => info!("Unit identity fingerprint: {}", identity.fingerprint()),
+        Err(e) => warn!("Failed to load/generate unit identity: {}", e),
+    }
 
     // Apply firmware patches on first boot
     if args.patch_firmware {
@@ -264,35 +304,71 @@ async fn main() -> anyhow::Result<()> {
     // Initialize firmware monitor
     // fw_patcher::run_monitor_task().await;
 
-    // Capture pipeline directories: AngryOxide writes its raw output
-    // (pcapng/hc22000/kismetdb/tarball) directly into the staging dir via
-    // `-o`; `CaptureManager` validates candidates with `hcxpcapngtool` and
-    // moves confirmed handshakes into the final handshakes directory.
-    let staging_dir = PathBuf::from("/var/tmp/pwnghost/ao-output");
+    // Capture pipeline directory: bettercap (Phase 1's capture backend --
+    // replaces AngryOxide, which cannot capture on this hardware at all;
+    // see `bettercap` crate's doc comment) writes one real PCAPNG-format
+    // file per AP directly into this directory once `wifi.handshakes.file`
+    // is pointed at it with `aggregate=false` (confirmed directly from
+    // bettercap's Go source, `modules/wifi/wifi_recon_handshakes.go`).
+    // `CaptureManager` (unchanged from the AngryOxide era) validates
+    // candidates with `hcxpcapngtool` and moves confirmed handshakes into
+    // the final handshakes directory.
+    let staging_dir = PathBuf::from("/var/tmp/pwnghost/bettercap-output");
     let handshakes_dir = config.main.handshakes_dir();
-
-    // Initialize AngryOxide. The interface comes from config (`main.iface`)
-    // rather than a hardcoded `wlan0mon` - AO manages monitor mode itself via
-    // netlink, so it must be handed a plain interface name. The output
-    // prefix points into the capture staging dir so the filesystem watcher
-    // and the capture pipeline agree on where files show up.
-    // `whitelist`/`personality.deauth` are real, user-configurable
-    // settings (`config.toml`'s `[main] whitelist = []` and
-    // `[personality] deauth = false`) that previously never reached
-    // AngryOxide at all -- it was always spawned with an empty whitelist
-    // and deauth left enabled regardless of what the user configured.
-    let ao_config = angryoxide::args::AngryOxideConfig {
-        interface: config.main.iface.clone(),
-        output: Some(staging_dir.join("session")),
-        whitelist: config.main.whitelist.clone(),
-        disable_deauth: !config.personality.deauth,
-        ..angryoxide::args::AngryOxideConfig::default()
-    };
-    let ao_handle = init_angryoxide(&ao_config).await?;
 
     let capture_manager = agent::CaptureManager::new(staging_dir.clone(), handshakes_dir);
     if let Err(e) = capture_manager.init().await {
         warn!("Failed to initialize capture manager directories: {}", e);
+    }
+
+    // bettercap runs as its own systemd unit (real pwnagotchi's own
+    // architecture: `pwnagotchi/bettercap.py`'s `Client` talks to a
+    // separately-running bettercap process over this exact REST API) --
+    // we only need a client, not a process handle. Bootstrap it for
+    // autonomous recon + real per-AP handshake capture, matching real
+    // pwnagotchi's own bettercap bootstrap commands. Retried with backoff
+    // since bettercap's own startup (and its `ExecStartPre=monstart`
+    // nexmon monitor-mode bring-up) can take a few seconds longer than
+    // this service's own startup.
+    let bc = bettercap::BettercapClient::new(
+        &config.bettercap.hostname,
+        config.bettercap.port,
+        &config.bettercap.username,
+        &config.bettercap.password,
+    );
+    {
+        let bc = bc.clone();
+        let staging_dir = staging_dir.clone();
+        let bootstrap_cmd = format!(
+            "set wifi.handshakes.file {}; set wifi.handshakes.aggregate false; wifi.recon on",
+            staging_dir.display()
+        );
+        let mut last_err = None;
+        for attempt in 1..=10u32 {
+            match tokio::task::spawn_blocking({
+                let bc = bc.clone();
+                let cmd = bootstrap_cmd.clone();
+                move || bc.run_command(&cmd)
+            })
+            .await
+            {
+                Ok(Ok(())) => {
+                    info!("bettercap bootstrap succeeded (attempt {attempt})");
+                    last_err = None;
+                    break;
+                }
+                Ok(Err(e)) => last_err = Some(e),
+                Err(join_err) => last_err = Some(anyhow::anyhow!("{join_err}")),
+            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        }
+        if let Some(e) = last_err {
+            warn!(
+                "bettercap bootstrap failed after 10 attempts, continuing anyway \
+                 (recon/capture won't work until bettercap is reachable): {}",
+                e
+            );
+        }
     }
 
     // Initialize radio manager
@@ -421,10 +497,12 @@ async fn main() -> anyhow::Result<()> {
     // whatever embeds it into beacons/probe responses) and prunes stale
     // peers each tick. NOTE: nothing calls `update_peer()` with real data
     // yet - that requires parsing vendor IEs out of raw beacon/probe-
-    // response frames, and AngryOxide's CLI/stdout interface (see
-    // `angryoxide::parser` docs) exposes neither raw frames nor any
-    // structured peer data. `MeshManager` is fully implemented and
-    // unit-tested; wiring a real IE-capture source later just means calling
+    // response frames, which bettercap's REST API doesn't expose either
+    // (it's a real-AP/client list, not raw 802.11 management frames) --
+    // this is a separate, not-yet-decided mesh workstream (see
+    // REWORK_PLAN.md), independent of the Phase 1 capture-backend switch.
+    // `MeshManager` is fully implemented and unit-tested; wiring a real
+    // IE-capture source later just means calling
     // `update_peer()` from that source.
     let our_mac = read_iface_mac(&config.main.iface);
     let mesh_manager = agent::MeshManager::new(our_mac, config.main.name.clone());
@@ -460,7 +538,7 @@ async fn main() -> anyhow::Result<()> {
     agent.start();
 
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
-        config.oxigotchi.epoch_duration as u64,
+        config.agent.epoch_duration,
     ));
     // Display refresh, decoupled from the (much slower, `epoch_duration`-
     // paced) agent tick above -- confirmed on real hardware that tying
@@ -492,10 +570,12 @@ async fn main() -> anyhow::Result<()> {
     let mut recovery_save_interval = tokio::time::interval(recovery_manager.save_interval());
     recovery_save_interval.tick().await; // first tick fires immediately; skip it
 
-    // Once the AngryOxide event channel closes for good, stop selecting on
-    // it (recv() on a closed channel resolves immediately, which would
-    // otherwise busy-loop that branch and starve the timer tick below).
-    let mut ao_events_open = true;
+    // Poll bettercap for the live AP/client list (the agent's "eyes" --
+    // previously always empty; see `agent::Agent::aps_count`'s doc comment
+    // from the AngryOxide era) and scan for new capture files, decoupled
+    // from the slow epoch tick so a handshake gets processed within a few
+    // seconds of bettercap writing it, not up to a full epoch later.
+    let mut bettercap_poll_interval = tokio::time::interval(tokio::time::Duration::from_secs(3));
 
     // Tell systemd (Type=notify) that startup is complete, now that the
     // agent/AO/display/web are all initialized and we're about to enter the
@@ -514,77 +594,77 @@ async fn main() -> anyhow::Result<()> {
 
     loop {
         tokio::select! {
-            event = ao_handle.recv_event(), if ao_events_open => {
-                match event {
-                    Some(event) => {
-                        let is_handshake_file = matches!(
-                            event,
-                            angryoxide::parser::AoEvent::HandshakeFileWritten(_)
-                        );
-
-                        // AO's real-time activity narration (channel hops,
-                        // associations, deauths, etc.) was previously only
-                        // ever logged via `agent.handle_event` -- reaching
-                        // journalctl but nowhere in the UI, which is why
-                        // recon/pwning activity looked invisible even
-                        // though AO was genuinely doing it in the
-                        // background. Surface it to the web dashboard too.
-                        if let angryoxide::parser::AoEvent::StatusLine { level, message } = &event {
-                            if let Some(ref state_arc) = web_state {
-                                let ws = state_arc.read().await.ws_manager.clone();
-                                ws.broadcast_ao_activity(format!("{level:?}"), message.clone());
-                            }
+            _ = bettercap_poll_interval.tick() => {
+                // Real perception: pull bettercap's live AP+client list and
+                // feed it to the agent. Previously `agent.aps` was only
+                // ever populated by tests (AngryOxide exposed no such data
+                // over its CLI/stdout interface), so targeting/mood/RL
+                // features always saw an empty world; this is the fix.
+                let bc_for_session = bc.clone();
+                match tokio::task::spawn_blocking(move || bc_for_session.wifi_session()).await {
+                    Ok(Ok(session)) => {
+                        let aps = session.to_pwncore();
+                        if let Some(ref state_arc) = web_state {
+                            state_arc.write().await.aps = aps.clone();
                         }
+                        agent.update_aps(aps);
+                    }
+                    Ok(Err(e)) => warn!("bettercap wifi_session poll failed: {}", e),
+                    Err(join_err) => warn!("bettercap wifi_session task panicked: {}", join_err),
+                }
 
-                        agent.handle_event(&event);
+                // A real per-AP handshake file may have appeared in the
+                // staging dir since the last poll: run the capture pipeline
+                // (hcxpcapngtool validation + move-to-final) and attribute
+                // the result to the real AP it extracts the BSSID for.
+                // File-appearance stays the authoritative capture signal
+                // (matches the honest, non-fabricated design this project
+                // already used for AngryOxide -- we don't need bettercap's
+                // websocket event stream for this).
+                if let Some(cm) = agent.capture_manager.clone() {
+                    match cm.process_new().await {
+                        Ok(handshakes) => {
+                            for hs in handshakes {
+                                info!(
+                                    "Captured handshake: {} ({:?})",
+                                    hs.bssid, hs.handshake_type
+                                );
+                                agent.mark_handshake_captured(hs.bssid);
+                                // Feeds the on-screen/web "PWND" per-epoch
+                                // counter -- previously only ever bumped
+                                // from `Agent::handle_event`'s AngryOxide
+                                // `HandshakeFileWritten` branch, which
+                                // nothing calls now that bettercap replaces
+                                // AngryOxide (see the capture-manager scan
+                                // above), so it has to happen here instead.
+                                agent.epoch_tracker.current.track_handshake();
 
-                        // A handshake-shaped file showed up in AO's output
-                        // dir: run the capture pipeline (hcxpcapngtool
-                        // validation + move-to-final) and attribute the
-                        // result to the real AP it extracts the BSSID for.
-                        if is_handshake_file {
-                            if let Some(cm) = agent.capture_manager.clone() {
-                                match cm.process_new().await {
-                                    Ok(handshakes) => {
-                                        for hs in handshakes {
-                                            info!(
-                                                "Captured handshake: {} ({:?})",
-                                                hs.bssid, hs.handshake_type
-                                            );
-                                            agent.mark_handshake_captured(hs.bssid);
+                                if let Err(e) = agent
+                                    .plugins
+                                    .on_handshake(
+                                        &hs.bssid.to_string(),
+                                        hs.ssid.as_deref().unwrap_or(""),
+                                        &hs.hashcat_path,
+                                        &hs.pcapng_path,
+                                    )
+                                    .await
+                                {
+                                    warn!("Plugin on_handshake hook failed: {}", e);
+                                }
 
-                                            if let Err(e) = agent
-                                                .plugins
-                                                .on_handshake(
-                                                    &hs.bssid.to_string(),
-                                                    hs.ssid.as_deref().unwrap_or(""),
-                                                    &hs.hashcat_path,
-                                                )
-                                                .await
-                                            {
-                                                warn!("Plugin on_handshake hook failed: {}", e);
-                                            }
-
-                                            if let Some(ref state_arc) = web_state {
-                                                let ws = state_arc.read().await.ws_manager.clone();
-                                                ws.broadcast_handshake(
-                                                    hs.id.to_string(),
-                                                    hs.bssid.to_string(),
-                                                    hs.ssid.clone(),
-                                                    hs.channel.value(),
-                                                    format!("{:?}", hs.handshake_type),
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Err(e) => warn!("Capture processing failed: {}", e),
+                                if let Some(ref state_arc) = web_state {
+                                    let ws = state_arc.read().await.ws_manager.clone();
+                                    ws.broadcast_handshake(
+                                        hs.id.to_string(),
+                                        hs.bssid.to_string(),
+                                        hs.ssid.clone(),
+                                        hs.channel.value(),
+                                        format!("{:?}", hs.handshake_type),
+                                    );
                                 }
                             }
                         }
-                    }
-                    None => {
-                        warn!("AngryOxide event channel closed");
-                        ao_events_open = false;
+                        Err(e) => warn!("Capture processing failed: {}", e),
                     }
                 }
             }
@@ -669,30 +749,50 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
 
-                // Execute action
+                // Execute action. Phase 1: these now drive bettercap for
+                // real (`wifi.recon.channel`/`wifi.deauth`/`wifi.assoc`),
+                // replacing the AngryOxide era where all three were no-ops
+                // (AngryOxide exposed no runtime control channel at all).
+                // Commands run via `spawn_blocking` (ureq is a blocking
+                // client) so a slow/unreachable bettercap can't stall the
+                // main loop.
                 match action {
                     agent::AgentAction::Hop(ch) => {
-                        // NOTE: AngryOxide owns channel hopping internally
-                        // (via `-c`/`-b`/`--autohunt` plus its own
-                        // netlink-based monitor-mode management). This used
-                        // to call `radio.switch_to(RadioMode::Rage, ...)`,
-                        // but that toggles the RAGE/BT/SAFE radio *mode*
-                        // state machine (interface teardown + monitor-mode
-                        // bringup) - unrelated to WiFi channel selection,
-                        // and actively harmful here since it would flap
-                        // monitor mode out from under AO on every epoch
-                        // hop. We still track the intended channel locally
-                        // (feeds mood/epoch state and the web UI); we just
-                        // don't tell the radio manager to do anything.
-                        info!("Agent wants channel {} (informational; AO manages hopping)", ch);
+                        info!("Hopping to channel {}", ch);
                         agent.set_channel(ch);
+                        let bc = bc.clone();
+                        if let Err(e) = tokio::task::spawn_blocking(move || {
+                            bc.run_command(&format!("wifi.recon.channel {ch}"))
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+                        {
+                            warn!("bettercap wifi.recon.channel failed: {}", e);
+                        }
                     }
                     agent::AgentAction::Deauth(bssid) => {
                         info!("Deauthing {}", bssid);
-                        // Send deauth via AO
+                        let bc = bc.clone();
+                        if let Err(e) = tokio::task::spawn_blocking(move || {
+                            bc.run_command(&format!("wifi.deauth {bssid}"))
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+                        {
+                            warn!("bettercap wifi.deauth failed: {}", e);
+                        }
                     }
                     agent::AgentAction::Associate(bssid) => {
                         info!("Associating with {}", bssid);
+                        let bc = bc.clone();
+                        if let Err(e) = tokio::task::spawn_blocking(move || {
+                            bc.run_command(&format!("wifi.assoc {bssid}"))
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+                        {
+                            warn!("bettercap wifi.assoc failed: {}", e);
+                        }
                     }
                     agent::AgentAction::Sleep(secs) => {
                         info!("Sleeping for {}s", secs);
@@ -705,10 +805,28 @@ async fn main() -> anyhow::Result<()> {
                 // Check healing
                 let healing_action = agent.check_healing();
                 match healing_action {
-                    agent::HealingAction::RestartAo => {
-                        warn!("Healer: Restarting AngryOxide");
-                        if let Err(e) = ao_handle.restart().await {
-                            error!("Failed to restart AngryOxide: {}", e);
+                    agent::HealingAction::RestartCapture => {
+                        // bettercap now runs as its own systemd unit rather
+                        // than a child process we spawn/restart ourselves
+                        // (see the bettercap crate's doc comment), so
+                        // "restart" here means a soft REST-driven reset of
+                        // the wifi module -- toggle recon off/on and
+                        // reapply the handshake-capture settings -- rather
+                        // than killing the bettercap process.
+                        warn!("Healer: Soft-resetting bettercap's wifi module");
+                        let bc = bc.clone();
+                        let staging = staging_dir.clone();
+                        let reset = tokio::task::spawn_blocking(move || {
+                            bc.run_command("wifi.recon off")?;
+                            bc.run_command(&format!(
+                                "set wifi.handshakes.file {}; set wifi.handshakes.aggregate false; wifi.recon on",
+                                staging.display()
+                            ))
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")));
+                        if let Err(e) = reset {
+                            error!("Failed to soft-reset bettercap: {}", e);
                         }
                     }
                     agent::HealingAction::PowerCycleGpio => {
@@ -781,8 +899,23 @@ async fn main() -> anyhow::Result<()> {
                     } else {
                         format!("{}\u{2588}", config.main.name)
                     };
-                    if let Err(e) = d
-                        .draw_pwnagotchi_frame(
+                    // Both display calls below are wrapped in a timeout.
+                    // epd-waveshare's wait_until_idle (the real SPI/GPIO
+                    // BUSY-line poll under `draw_pwnagotchi_frame`/`update`)
+                    // is an unbounded busy-loop with no cap of its own -- a
+                    // stuck BUSY line (loose HAT connector, dead panel)
+                    // would otherwise hang this entire `select!` arm
+                    // forever, which stalls the whole main loop (radio,
+                    // capture, healer, watchdog notify, everything else in
+                    // this `select!`), not just the display. 5s is well
+                    // above any real draw+refresh latency on this hardware
+                    // but short enough that a genuine hang is caught almost
+                    // immediately rather than silently freezing the agent.
+                    const DISPLAY_OP_TIMEOUT: std::time::Duration =
+                        std::time::Duration::from_secs(5);
+                    let draw_result = tokio::time::timeout(
+                        DISPLAY_OP_TIMEOUT,
+                        d.draw_pwnagotchi_frame(
                             agent.current_channel(),
                             aps_count,
                             &uptime,
@@ -797,22 +930,33 @@ async fn main() -> anyhow::Result<()> {
                             friend
                                 .as_ref()
                                 .map(|(face, line)| (face.as_str(), line.as_str())),
-                        )
-                        .await
-                    {
-                        warn!("Display draw failed: {}", e);
-                    } else {
-                        // Publish the freshly-drawn frame to the web UI's
-                        // live view (`/ui`) before pushing it to the panel,
-                        // so the browser mirrors exactly what the e-ink shows
-                        // -- the same model as real pwnagotchi's PNG frame.
-                        if let Some(ref state_arc) = web_state {
-                            if let Ok(png) = d.frame_png().await {
-                                state_arc.write().await.frame_png = png;
+                        ),
+                    )
+                    .await;
+                    match draw_result {
+                        Err(_) => warn!(
+                            "Display draw timed out after {:?} (possible stuck BUSY line)",
+                            DISPLAY_OP_TIMEOUT
+                        ),
+                        Ok(Err(e)) => warn!("Display draw failed: {}", e),
+                        Ok(Ok(())) => {
+                            // Publish the freshly-drawn frame to the web UI's
+                            // live view (`/ui`) before pushing it to the panel,
+                            // so the browser mirrors exactly what the e-ink shows
+                            // -- the same model as real pwnagotchi's PNG frame.
+                            if let Some(ref state_arc) = web_state {
+                                if let Ok(png) = d.frame_png().await {
+                                    state_arc.write().await.frame_png = png;
+                                }
                             }
-                        }
-                        if let Err(e) = d.update(true).await {
-                            warn!("Display update failed: {}", e);
+                            match tokio::time::timeout(DISPLAY_OP_TIMEOUT, d.update(true)).await {
+                                Err(_) => warn!(
+                                    "Display update timed out after {:?} (possible stuck BUSY line)",
+                                    DISPLAY_OP_TIMEOUT
+                                ),
+                                Ok(Err(e)) => warn!("Display update failed: {}", e),
+                                Ok(Ok(())) => {}
+                            }
                         }
                     }
                 }
@@ -838,7 +982,20 @@ async fn main() -> anyhow::Result<()> {
     // Shutdown
     info!("Shutting down...");
     agent.stop();
-    ao_handle.stop().await?;
+    // bettercap is a separate systemd unit we don't own the lifecycle of
+    // (unlike AngryOxide, which was our own child process) -- best-effort
+    // tell it to stop reconning rather than leaving the radio hopping with
+    // no agent attached; non-fatal if bettercap is already unreachable.
+    {
+        let bc = bc.clone();
+        if let Err(e) =
+            tokio::task::spawn_blocking(move || bc.run_command("wifi.recon off"))
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+        {
+            warn!("Failed to stop bettercap wifi.recon on shutdown: {}", e);
+        }
+    }
 
     // Final recovery save so a clean shutdown never loses progress made
     // since the last periodic save.

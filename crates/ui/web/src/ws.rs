@@ -57,17 +57,13 @@ pub enum LiveUpdate {
         battery: Option<u8>,
         charging: bool,
     },
-    /// A real-time status line straight from AngryOxide's own stdout
-    /// (level + free-text message, ANSI-stripped -- see
-    /// `angryoxide::parser`'s doc comment for why this project doesn't
-    /// try to parse structured channel/AP/frame data out of AO's output:
-    /// AO exposes no such structured protocol, and guessing at one would
-    /// be a fabricated-protocol trap). This is the only live signal of
-    /// AO's actual scanning/capture activity (channel hops, associations,
-    /// deauths, etc.) available anywhere in the UI, so the web dashboard
-    /// surfaces it directly as a scrolling feed instead of the recon
-    /// activity being invisible outside `journalctl`.
-    AoActivity {
+    /// A real-time status line from the agent's capture/recon activity
+    /// (level + free-text message, ANSI-stripped). This is the live signal
+    /// of scanning/capture activity (channel hops, associations, deauths,
+    /// etc.) available in the UI, so the web dashboard surfaces it directly
+    /// as a scrolling feed instead of that activity being invisible outside
+    /// `journalctl`.
+    Activity {
         level: String,
         message: String,
     },
@@ -213,8 +209,8 @@ impl WebSocketManager {
         });
     }
 
-    pub fn broadcast_ao_activity(&self, level: String, message: String) {
-        self.broadcast(LiveUpdate::AoActivity { level, message });
+    pub fn broadcast_activity(&self, level: String, message: String) {
+        self.broadcast(LiveUpdate::Activity { level, message });
     }
 }
 
