@@ -162,11 +162,20 @@ Output: `pwnghost-rs-rebased-pi-zero-w.img.xz` /
   needed). `pwnghost-rs.service` keeps its existing
   `ProtectSystem=strict`+`ReadWritePaths=` hardening so a crash in our
   own daemon can't write outside its own data directories.
-- **Not carried over in this first pass**: BT-PAN tethering
-  (`bt-agent.service`/`bt-pan@.service`) and `wifi-country.service`, since
-  it's unverified whether they'd conflict with whatever mechanism (if
-  any) this base image already uses for the same things. Worth revisiting
-  once the core rebase is verified working on real hardware.
+- **BT-PAN tethering and `wifi-country.service` are now carried over**
+  (this note previously said they weren't -- that's stale, both landed in
+  `build.sh`/`overlay/` since). `wifi-country.service` isn't optional: a
+  real-hardware boot of this rebased image without it showed `wlan0mon`
+  permanently stuck in `Operation not possible due to RF-kill` (this base
+  image never runs a wifi-country first-boot step the way stock Raspberry
+  Pi OS does via `raspi-config`) -- confirmed real bug, not a theoretical
+  gap. `bt-agent.service` (NoInputNoOutput pairing agent) is ported from
+  the from-scratch pi-gen build's overlay, which already had this
+  working, confirmed directly by mounting the base image (it ships the
+  bt-agent/bluetoothctl binaries this depends on). `bt-pan@.service`
+  itself is a template unit, not auto-enabled -- `bt_tether.lua` starts
+  it per-device once a phone's MAC is configured, matching pi-gen's
+  design.
 
 ## Display
 
