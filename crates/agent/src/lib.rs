@@ -270,7 +270,7 @@ impl Agent {
     /// Build an `AgentRef` snapshot of the current agent state for
     /// plugin hook invocation.  Mirrors the fields real pwnagotchi's
     /// Lua plugins expect on the `agent` global table.
-    fn build_agent_ref(&self) -> plugins::AgentRef {
+    pub fn build_agent_ref(&self) -> plugins::AgentRef {
         plugins::AgentRef {
             current_epoch: self.total_epochs(),
             current_channel: self.current_channel(),
