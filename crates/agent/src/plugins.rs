@@ -163,6 +163,9 @@ impl PluginManager {
 
                     match LuaPlugin::new(key, &code) {
                         Ok(plugin) => {
+                            if let Err(e) = plugin.execute("on_loaded") {
+                                warn!("Plugin {} on_loaded error: {}", key, e);
+                            }
                             self.plugins.insert(key.to_string(), plugin);
                             info!("Loaded plugin: {}", key);
                         }
@@ -191,6 +194,9 @@ impl PluginManager {
             }
             match LuaPlugin::new(name, code) {
                 Ok(plugin) => {
+                    if let Err(e) = plugin.execute("on_loaded") {
+                        warn!("Plugin {} on_loaded error: {}", name, e);
+                    }
                     self.plugins.entry(name.to_string()).or_insert(plugin);
                 }
                 Err(e) => warn!("Failed to load builtin plugin {}: {}", name, e),
