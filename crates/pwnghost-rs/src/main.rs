@@ -904,12 +904,7 @@ async fn main() -> anyhow::Result<()> {
                         }
                         // Fire plugin hook so plugins are aware of the intent
                         // even in manual mode (some may log or display it).
-                        let ssid = agent
-                            .aps()
-                            .iter()
-                            .find(|ap| ap.bssid.to_string() == bssid_for_hook)
-                            .and_then(|ap| ap.ssid.as_deref())
-                            .unwrap_or("");
+                        let ssid = agent.ap_ssid(&bssid_for_hook).unwrap_or("");
                         if let Err(e) = agent
                             .plugins
                             .on_deauthentication(&bssid_for_hook, ssid, "")
@@ -935,12 +930,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                         // Fire plugin hook.
-                        let ssid = agent
-                            .aps()
-                            .iter()
-                            .find(|ap| ap.bssid.to_string() == bssid_for_hook)
-                            .and_then(|ap| ap.ssid.as_deref())
-                            .unwrap_or("");
+                        let ssid = agent.ap_ssid(&bssid_for_hook).unwrap_or("");
                         if let Err(e) = agent
                             .plugins
                             .on_association(&bssid_for_hook, ssid)

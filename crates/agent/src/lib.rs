@@ -624,6 +624,14 @@ impl Agent {
         &self.aps
     }
 
+    /// Look up the SSID of an AP by BSSID string.
+    pub fn ap_ssid(&self, bssid: &str) -> Option<&str> {
+        self.aps
+            .iter()
+            .find(|ap| ap.bssid.to_string() == bssid)
+            .and_then(|ap| ap.ssid.as_deref())
+    }
+
     /// Merge one AP observation into `self.aps`, updating in place if we've
     /// already seen this BSSID and returning whether it was new. Called from
     /// `update_aps`, which is fed real data by `bettercap::WifiSession::
