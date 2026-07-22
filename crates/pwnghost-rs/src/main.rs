@@ -607,6 +607,7 @@ async fn main() -> anyhow::Result<()> {
     let mut last_display = DisplaySnap::default();
     let mut display_force = 0u32;
     let mut was_online = false;
+    let mut previous_peer_macs: Vec<String> = Vec::new();
 
     // systemd watchdog ping. Harmless if the unit doesn't set
     // `WatchdogSec=`; ready to use as soon as it does.
@@ -782,6 +783,24 @@ async fn main() -> anyhow::Result<()> {
                     .map(|mp| mp.peer)
                     .collect();
                 agent.update_peers(peers.clone());
+
+                // Peer diff for on_peer_detected / on_peer_lost
+                let peer_macs: Vec<String> = peers.iter().map(|p| p.mac.to_string()).collect();
+                for peer in &peers {
+                    if !previous_peer_macs.contains(&peer.mac.to_string()) {
+                        agent.plugins.on_peer_detected(
+                            &peer.mac.to_string(),
+                            &peer.name,
+                            peer.channel,
+                        );
+                    }
+                }
+                for prev_mac in &previous_peer_macs {
+                    if !peer_macs.contains(prev_mac) {
+                        agent.plugins.on_peer_lost(prev_mac, "");
+                    }
+                }
+                previous_peer_macs = peer_macs;
 
                 // Run the on_epoch hook for every loaded Lua plugin, reporting
                 // the epoch that just finished (real counts, from history)

@@ -364,6 +364,39 @@ impl PluginManager {
         }
     }
 
+    pub fn on_peer_detected(&self, mac: &str, name: &str, channel: u8) {
+        for (_, plugin) in &self.plugins {
+            let globals = plugin.lua.globals();
+            if let Err(e) = globals
+                .set("peer_mac", mac)
+                .and_then(|_| globals.set("peer_name", name))
+                .and_then(|_| globals.set("peer_channel", channel as u64))
+            {
+                warn!("Plugin on_peer_detected context error: {}", e);
+                continue;
+            }
+            if let Err(e) = plugin.execute("on_peer_detected") {
+                warn!("Plugin on_peer_detected error: {}", e);
+            }
+        }
+    }
+
+    pub fn on_peer_lost(&self, mac: &str, name: &str) {
+        for (_, plugin) in &self.plugins {
+            let globals = plugin.lua.globals();
+            if let Err(e) = globals
+                .set("peer_mac", mac)
+                .and_then(|_| globals.set("peer_name", name))
+            {
+                warn!("Plugin on_peer_lost context error: {}", e);
+                continue;
+            }
+            if let Err(e) = plugin.execute("on_peer_lost") {
+                warn!("Plugin on_peer_lost error: {}", e);
+            }
+        }
+    }
+
     /// Set the `agent` Lua global table on every loaded plugin.
     /// Fields mirror the OG pwnagotchi `agent` object that plugin
     /// hook callbacks receive — plugins reference `agent.mood`,
