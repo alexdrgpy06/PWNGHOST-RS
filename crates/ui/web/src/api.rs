@@ -564,12 +564,14 @@ pub async fn get_ui_frame(State(state): State<Arc<RwLock<AppState>>>) -> axum::r
 /// Dispatches the request through a channel to the agent's main loop,
 /// which processes it on the same thread where `PluginManager` lives.
 pub async fn plugin_webhook(
-    Path((name, path)): Path<(String, String)>,
+    Path((name, path)): Path<(String, std::path::PathBuf)>,
     State(state): State<Arc<RwLock<AppState>>>,
     method: Method,
     body: Bytes,
 ) -> impl axum::response::IntoResponse {
     use axum::response::IntoResponse;
+    use std::time::Duration;
+    use tokio::time::timeout;
 
     let body_str = String::from_utf8_lossy(&body).to_string();
     let state = state.read().await;
@@ -579,7 +581,7 @@ pub async fn plugin_webhook(
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let req = WebhookRequest {
         plugin_name: name,
-        path,
+        path: path.to_string_lossy().to_string(),
         method: method.as_str().to_string(),
         body: body_str,
         reply: reply_tx,
@@ -591,13 +593,19 @@ pub async fn plugin_webhook(
         )
             .into_response();
     }
-    match reply_rx.await {
-        Ok((status, response)) => {
+    // Timeout after 30s to prevent hung requests if plugin misbehaves
+    match timeout(Duration::from_secs(30), reply_rx).await {
+        Ok(Ok((status, response))) => {
             (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), response).into_response()
         }
-        Err(_) => (
+        Ok(Err(_)) => (
             StatusCode::SERVICE_UNAVAILABLE,
             "Webhook reply cancelled".to_string(),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            "Webhook handler timeout (30s)".to_string(),
         )
             .into_response(),
     }

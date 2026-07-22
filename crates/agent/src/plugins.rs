@@ -530,6 +530,9 @@ impl PluginManager {
             return (404, format!("Plugin '{}' not found", plugin_name));
         };
         let globals = plugin.lua.globals();
+        // Clear output globals first to prevent stale values from leaking
+        let _ = globals.set("webhook_status", Option::<u16>::None);
+        let _ = globals.set("webhook_response", Option::<String>::None);
         if let Err(e) = globals
             .set("webhook_path", path)
             .and_then(|_| globals.set("webhook_method", method))

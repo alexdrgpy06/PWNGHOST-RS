@@ -1,8 +1,7 @@
 //! Web server for PWNGHOST-RS
 
-use axum::extract::ws::WebSocketUpgrade;
 use axum::{
-    extract::State,
+    extract::{State, DefaultBodyLimit, WebSocketUpgrade},
     response::Html,
     routing::{any, get, post},
     Router,
@@ -34,7 +33,7 @@ pub fn create_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/api/plugins/:name/options", post(update_plugin_options))
         // Accept any HTTP method (GET, POST, etc.) so Lua plugins can
         // define REST-style handlers without method restrictions.
-        .route("/api/plugins/:name/webhook/:path", any(plugin_webhook))
+        .route("/api/plugins/:name/webhook/*path", any(plugin_webhook))
         .route("/api/reboot", post(reboot_system))
         // Live e-ink frame as PNG, polled ~1s by the dashboard -- the same
         // "live view" real pwnagotchi serves at `/ui`.
@@ -48,6 +47,7 @@ pub fn create_router(state: Arc<RwLock<AppState>>) -> Router {
                 .allow_methods(Any)
                 .allow_headers(Any),
         )
+        .layer(DefaultBodyLimit::max(1_048_576)) // 1 MiB body limit
         .with_state(state)
 }
 
