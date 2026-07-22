@@ -444,6 +444,33 @@ impl PluginManager {
         }
     }
 
+    /// Invoke a mood-transition hook on every loaded plugin.
+    /// Maps each `Mood` variant to its corresponding Lua hook name
+    /// (e.g. `on_grateful`, `on_lonely`) and calls it with fresh
+    /// `agent` globals.  Unknown/unmapped moods are silently ignored.
+    pub fn fire_mood_hook(&self, mood: &pwncore::Mood, agent_ref: &AgentRef) {
+        let hook = match mood {
+            pwncore::Mood::Grateful => "on_grateful",
+            pwncore::Mood::Lonely => "on_lonely",
+            pwncore::Mood::Bored => "on_bored",
+            pwncore::Mood::Sad => "on_sad",
+            pwncore::Mood::Angry => "on_angry",
+            pwncore::Mood::Excited => "on_excited",
+            pwncore::Mood::Motivated => "on_motivated",
+            pwncore::Mood::Demotivated => "on_demotivated",
+            pwncore::Mood::Broken => "on_rebooting",
+            pwncore::Mood::Sleep => "on_sleep",
+            _ => return,
+        };
+
+        self.set_agent_globals(agent_ref);
+        for (name, plugin) in &self.plugins {
+            if let Err(e) = plugin.execute(hook) {
+                warn!("Plugin {} {} error: {}", name, hook, e);
+            }
+        }
+    }
+
     pub fn list_plugins(&self) -> Vec<String> {
         self.plugins.keys().cloned().collect()
     }

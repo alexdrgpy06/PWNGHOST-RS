@@ -169,6 +169,9 @@ impl Agent {
             .personality
             .compute_mood(&self.epoch_tracker.current, &self.peers);
         if new_mood != self.current_mood {
+            let agent_ref = self.build_agent_ref();
+            self.plugins.fire_mood_hook(&new_mood, &agent_ref);
+
             // Provide runtime context for voice-line interpolation
             // ({name}, {ap}, {sta} placeholders).  Peer name is the
             // closest/most-relevant peer; AP name is the SSID of the
@@ -262,6 +265,35 @@ impl Agent {
     /// Reset healer (called after successful recovery)
     pub fn reset_healer(&mut self) {
         self.healer.reset();
+    }
+
+    /// Build an `AgentRef` snapshot of the current agent state for
+    /// plugin hook invocation.  Mirrors the fields real pwnagotchi's
+    /// Lua plugins expect on the `agent` global table.
+    fn build_agent_ref(&self) -> plugins::AgentRef {
+        plugins::AgentRef {
+            current_epoch: self.total_epochs(),
+            current_channel: self.current_channel(),
+            aps_count: self.aps.len() as usize,
+            handshakes: self.epoch_tracker.current.handshakes_this_epoch,
+            total_handshakes: self.epoch_tracker.current.total_handshakes as u32,
+            mood: format!("{:?}", self.current_mood),
+            peers: self
+                .peers
+                .iter()
+                .map(|p| plugins::PeerInfo {
+                    mac: p.mac.to_string(),
+                    name: p.name.clone(),
+                    channel: p.channel,
+                    mood: format!("{:?}", p.mood),
+                    level: p.level,
+                })
+                .collect(),
+            level: self.personality.stats().level,
+            xp: self.personality.stats().xp,
+            uptime: self.start.elapsed().as_secs(),
+            name: String::new(),
+        }
     }
 
     /// Select next action. Consults the RL agent first (if one is loaded);
