@@ -352,6 +352,18 @@ impl PluginManager {
         Ok(())
     }
 
+    /// Invoke the `on_wifi_update` hook of every loaded plugin.
+    /// Called after a refreshed AP list is received from bettercap.
+    /// Sets agent globals so plugins see the latest state.
+    pub fn on_wifi_update(&self, agent_ref: &AgentRef) {
+        self.set_agent_globals(agent_ref);
+        for (name, plugin) in &self.plugins {
+            if let Err(e) = plugin.execute("on_wifi_update") {
+                warn!("Plugin {} on_wifi_update error: {}", name, e);
+            }
+        }
+    }
+
     /// Set the `agent` Lua global table on every loaded plugin.
     /// Fields mirror the OG pwnagotchi `agent` object that plugin
     /// hook callbacks receive — plugins reference `agent.mood`,

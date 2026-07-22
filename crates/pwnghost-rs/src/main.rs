@@ -683,6 +683,23 @@ async fn main() -> anyhow::Result<()> {
                                 );
                             }
                         }
+
+                        // Fire plugin's on_wifi_update so plugins can react
+                        // to the refreshed AP list.
+                        let agent_ref = agent::AgentRef {
+                            current_epoch: agent.total_epochs(),
+                            current_channel: agent.current_channel(),
+                            aps_count: agent.aps().len(),
+                            handshakes: agent.epoch_tracker.current.handshakes_this_epoch,
+                            total_handshakes: agent.epoch_tracker.current.total_handshakes as u32,
+                            mood: format!("{:?}", agent.current_mood()),
+                            peers: Vec::new(),
+                            level: agent.personality.stats().level,
+                            xp: agent.personality.stats().xp,
+                            uptime: agent.start.elapsed().as_secs(),
+                            name: config.main.name.clone(),
+                        };
+                        agent.plugins.on_wifi_update(&agent_ref);
                     }
                     Ok(Err(e)) => {
                         warn!("bettercap wifi_session poll failed: {}", e);
