@@ -89,6 +89,14 @@ struct Args {
     /// Interface to use
     #[arg(short, long)]
     interface: Option<String>,
+
+    /// Manual mode: observe and display stats but never send deauth/associate
+    /// commands to bettercap.  Useful for demos, debugging, or passive network
+    /// monitoring without attacking endpoints.  Equivalent to setting
+    /// `personality.deauth = false` and `personality.associate = false` at
+    /// runtime without touching the config file.
+    #[arg(short, long)]
+    manual: bool,
 }
 
 /// Read the MAC address of `iface` from sysfs, for use as our mesh identity.
@@ -204,6 +212,14 @@ fn animated_face(
     }
 }
 
+fn check_internet() -> bool {
+    std::process::Command::new("ping")
+        .args(["-n", "1", "-w", "2000", "8.8.8.8"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -217,6 +233,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(iface) = args.interface {
         config.main.iface = iface;
     }
+    let manual = args.manual;
 
     // Non-rotating (exact filename, no date suffix) so this matches the
     // literal path config.toml (and other tooling expecting to find it
@@ -339,9 +356,14 @@ async fn main() -> anyhow::Result<()> {
     {
         let bc = bc.clone();
         let staging_dir = staging_dir.clone();
+        // `wifi.rssi.min` mirrors real pwnagotchi's own bettercap bootstrap
+        // (`Agent._reset_wifi_settings`) -- tells bettercap itself not to
+        // bother reporting APs weaker than the configured floor, instead of
+        // only filtering them out after the fact in `Agent::find_target`.
         let bootstrap_cmd = format!(
-            "set wifi.handshakes.file {}; set wifi.handshakes.aggregate false; wifi.recon on",
-            staging_dir.display()
+            "set wifi.handshakes.file {}; set wifi.handshakes.aggregate false; set wifi.rssi.min {}; wifi.recon on",
+            staging_dir.display(),
+            config.personality.min_rssi
         );
         let mut last_err = None;
         for attempt in 1..=10u32 {
@@ -430,6 +452,9 @@ async fn main() -> anyhow::Result<()> {
     // Create agent
     let mut agent = Agent::new(agent::Personality::new(config.personality.clone().into()));
     agent.capture_manager = Some(Arc::new(capture_manager));
+    // Previously never consulted at all -- see `Agent::is_whitelisted`'s
+    // doc comment for the real-world consequence this had.
+    agent.whitelist = config.main.whitelist.clone();
 
     // Load Lua plugins: built-ins (embedded via `include_str!`) plus any
     // user plugins found under `config.main.custom_plugins`.
@@ -560,6 +585,29 @@ async fn main() -> anyhow::Result<()> {
     // our epoch tick is far slower than 1s, so without animating here the
     // face would sit frozen between epochs.
     let mut display_tick: u64 = 0;
+    // Dirty-tracking snapshot for the e-ink display.  We skip
+    // `d.update(true)` when nothing semantically meaningful changed
+    // (uptime and the blinking-name cursor change every second but
+    // don't warrant a display refresh -- every partial refresh still
+    // contributes to e-ink panel wear).  A forced refresh runs every
+    // 30 ticks so the screen never looks hung if the user glances at
+    // it, even when the endpoint is in a quiet environment.
+    #[derive(Default, Clone, PartialEq)]
+    struct DisplaySnap {
+        channel: u8,
+        aps: usize,
+        mood: String,
+        phrase: String,
+        handshakes: u32,
+        total: u32,
+        level: u32,
+        xp: u32,
+        friend: Option<(String, String)>,
+    }
+    let mut last_display = DisplaySnap::default();
+    let mut display_force = 0u32;
+    let mut was_online = false;
+
     // systemd watchdog ping. Harmless if the unit doesn't set
     // `WatchdogSec=`; ready to use as soon as it does.
     let mut watchdog_interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
@@ -603,14 +651,47 @@ async fn main() -> anyhow::Result<()> {
                 let bc_for_session = bc.clone();
                 match tokio::task::spawn_blocking(move || bc_for_session.wifi_session()).await {
                     Ok(Ok(session)) => {
+                        // Bettercap answered: healthy heartbeat. Feeds the
+                        // Healer's 6-layer state machine (`check_healing`
+                        // below), which was otherwise permanently inert --
+                        // `report_crash`/`report_alive` were fully
+                        // implemented but never called from any real
+                        // failure path, so the crash-window never had
+                        // anything in it and `decide()` could never
+                        // escalate past `FwWatchdog`.
+                        agent.report_alive();
                         let aps = session.to_pwncore();
                         if let Some(ref state_arc) = web_state {
                             state_arc.write().await.aps = aps.clone();
                         }
-                        agent.update_aps(aps);
+                        let new_aps = agent.update_aps(aps);
+                        // Live activity feed: previously `WebSocketManager::
+                        // broadcast_activity` was fully implemented but never
+                        // called from anywhere, so the WebUI's "Live activity"
+                        // panel stayed on its static placeholder forever no
+                        // matter how much real capture activity happened.
+                        if let Some(ref state_arc) = web_state {
+                            let ws = state_arc.read().await.ws_manager.clone();
+                            for ap in &new_aps {
+                                ws.broadcast_activity(
+                                    "info".to_string(),
+                                    format!(
+                                        "New AP detected: {} ({})",
+                                        ap.ssid.as_deref().unwrap_or("<hidden>"),
+                                        ap.bssid
+                                    ),
+                                );
+                            }
+                        }
                     }
-                    Ok(Err(e)) => warn!("bettercap wifi_session poll failed: {}", e),
-                    Err(join_err) => warn!("bettercap wifi_session task panicked: {}", join_err),
+                    Ok(Err(e)) => {
+                        warn!("bettercap wifi_session poll failed: {}", e);
+                        agent.report_crash();
+                    }
+                    Err(join_err) => {
+                        warn!("bettercap wifi_session task panicked: {}", join_err);
+                        agent.report_crash();
+                    }
                 }
 
                 // A real per-AP handshake file may have appeared in the
@@ -638,6 +719,18 @@ async fn main() -> anyhow::Result<()> {
                                 // AngryOxide (see the capture-manager scan
                                 // above), so it has to happen here instead.
                                 agent.epoch_tracker.current.track_handshake();
+
+                                if let Some(ref state_arc) = web_state {
+                                    let ws = state_arc.read().await.ws_manager.clone();
+                                    ws.broadcast_activity(
+                                        "priority".to_string(),
+                                        format!(
+                                            "Captured handshake: {} ({})",
+                                            hs.ssid.as_deref().unwrap_or("<unknown>"),
+                                            hs.bssid
+                                        ),
+                                    );
+                                }
 
                                 if let Err(e) = agent
                                     .plugins
@@ -686,10 +779,20 @@ async fn main() -> anyhow::Result<()> {
                     .collect();
                 agent.update_peers(peers.clone());
 
-                // Run the on_epoch hook for every loaded Lua plugin.
+                // Run the on_epoch hook for every loaded Lua plugin, reporting
+                // the epoch that just finished (real counts, from history)
+                // rather than `epoch_tracker.current`, which `agent.tick()`
+                // already replaced with the next epoch's freshly-zeroed
+                // state above -- see `EpochTracker::last_completed`'s doc
+                // comment. Mirrors real pwnagotchi's own `epoch - 1`
+                // adjustment in `Automata.next_epoch()` for the same reason.
+                let finished_epoch = agent
+                    .epoch_tracker
+                    .last_completed()
+                    .unwrap_or(&agent.epoch_tracker.current);
                 if let Err(e) = agent
                     .plugins
-                    .on_epoch(agent.total_epochs(), &agent.epoch_tracker.current)
+                    .on_epoch(agent.total_epochs().saturating_sub(1), finished_epoch)
                     .await
                 {
                     warn!("Plugin on_epoch hook failed: {}", e);
@@ -700,6 +803,7 @@ async fn main() -> anyhow::Result<()> {
                 // tick further down.
                 let stats = agent.personality.stats();
                 let mood_str = format!("{:?}", agent.current_mood());
+                let phrase = agent.current_phrase().to_string();
                 let aps_count = agent.aps_count();
                 let cpu_temp = read_cpu_temp();
                 let (ram_used_mb, ram_total_mb) = read_ram_usage_mb();
@@ -721,6 +825,7 @@ async fn main() -> anyhow::Result<()> {
                         state.current_channel = agent.current_channel();
                         state.mood = agent.current_mood();
                         state.face = face.to_string();
+                        state.phrase = phrase.clone();
                         state.handshakes = agent.epoch_tracker.current.handshakes_this_epoch;
                         state.level = stats.level;
                         state.xp = stats.xp;
@@ -739,13 +844,14 @@ async fn main() -> anyhow::Result<()> {
                         agent.current_channel(),
                         mood_str.clone(),
                         face.to_string(),
+                        phrase.clone(),
                         stats.level,
                         stats.xp,
                         peers.len(),
                     );
 
                     if mood_changed {
-                        ws.broadcast_mood_change(mood_str, face.to_string());
+                        ws.broadcast_mood_change(mood_str, face.to_string(), phrase.clone());
                     }
                 }
 
@@ -756,10 +862,16 @@ async fn main() -> anyhow::Result<()> {
                 // Commands run via `spawn_blocking` (ureq is a blocking
                 // client) so a slow/unreachable bettercap can't stall the
                 // main loop.
+                // Plugin hooks fire after the bettercap command so plugins
+                // see the side-effect as having happened.
+                let old_channel = agent.current_channel();
                 match action {
                     agent::AgentAction::Hop(ch) => {
                         info!("Hopping to channel {}", ch);
                         agent.set_channel(ch);
+                        if let Err(e) = agent.plugins.on_channel_hop(old_channel, ch).await {
+                            warn!("Plugin on_channel_hop error: {}", e);
+                        }
                         let bc = bc.clone();
                         if let Err(e) = tokio::task::spawn_blocking(move || {
                             bc.run_command(&format!("wifi.recon.channel {ch}"))
@@ -771,27 +883,66 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     agent::AgentAction::Deauth(bssid) => {
-                        info!("Deauthing {}", bssid);
-                        let bc = bc.clone();
-                        if let Err(e) = tokio::task::spawn_blocking(move || {
-                            bc.run_command(&format!("wifi.deauth {bssid}"))
-                        })
-                        .await
-                        .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+                        let bssid_for_hook = bssid.clone();
+                        if manual {
+                            info!("[MANUAL] Would deauth {}", bssid);
+                        } else {
+                            info!("Deauthing {}", bssid);
+                            let bc = bc.clone();
+                            if let Err(e) = tokio::task::spawn_blocking(move || {
+                                bc.run_command(&format!("wifi.deauth {bssid}"))
+                            })
+                            .await
+                            .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+                            {
+                                warn!("bettercap wifi.deauth failed: {}", e);
+                            }
+                        }
+                        // Fire plugin hook so plugins are aware of the intent
+                        // even in manual mode (some may log or display it).
+                        let ssid = agent
+                            .aps()
+                            .iter()
+                            .find(|ap| ap.bssid.to_string() == bssid_for_hook)
+                            .and_then(|ap| ap.ssid.as_deref())
+                            .unwrap_or("");
+                        if let Err(e) = agent
+                            .plugins
+                            .on_deauthentication(&bssid_for_hook, ssid, "")
+                            .await
                         {
-                            warn!("bettercap wifi.deauth failed: {}", e);
+                            warn!("Plugin on_deauthentication error: {}", e);
                         }
                     }
                     agent::AgentAction::Associate(bssid) => {
-                        info!("Associating with {}", bssid);
-                        let bc = bc.clone();
-                        if let Err(e) = tokio::task::spawn_blocking(move || {
-                            bc.run_command(&format!("wifi.assoc {bssid}"))
-                        })
-                        .await
-                        .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+                        let bssid_for_hook = bssid.clone();
+                        if manual {
+                            info!("[MANUAL] Would associate with {}", bssid);
+                        } else {
+                            info!("Associating with {}", bssid);
+                            let bc = bc.clone();
+                            if let Err(e) = tokio::task::spawn_blocking(move || {
+                                bc.run_command(&format!("wifi.assoc {bssid}"))
+                            })
+                            .await
+                            .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+                            {
+                                warn!("bettercap wifi.assoc failed: {}", e);
+                            }
+                        }
+                        // Fire plugin hook.
+                        let ssid = agent
+                            .aps()
+                            .iter()
+                            .find(|ap| ap.bssid.to_string() == bssid_for_hook)
+                            .and_then(|ap| ap.ssid.as_deref())
+                            .unwrap_or("");
+                        if let Err(e) = agent
+                            .plugins
+                            .on_association(&bssid_for_hook, ssid)
+                            .await
                         {
-                            warn!("bettercap wifi.assoc failed: {}", e);
+                            warn!("Plugin on_association error: {}", e);
                         }
                     }
                     agent::AgentAction::Sleep(secs) => {
@@ -816,11 +967,13 @@ async fn main() -> anyhow::Result<()> {
                         warn!("Healer: Soft-resetting bettercap's wifi module");
                         let bc = bc.clone();
                         let staging = staging_dir.clone();
+                        let min_rssi = config.personality.min_rssi;
                         let reset = tokio::task::spawn_blocking(move || {
                             bc.run_command("wifi.recon off")?;
                             bc.run_command(&format!(
-                                "set wifi.handshakes.file {}; set wifi.handshakes.aggregate false; wifi.recon on",
-                                staging.display()
+                                "set wifi.handshakes.file {}; set wifi.handshakes.aggregate false; set wifi.rssi.min {}; wifi.recon on",
+                                staging.display(),
+                                min_rssi
                             ))
                         })
                         .await
@@ -861,10 +1014,25 @@ async fn main() -> anyhow::Result<()> {
                 // tick happens to fire.
                 if let Some(ref d) = display {
                     display_tick = display_tick.wrapping_add(1);
+
+                    // Internet connectivity check every 30 ticks
+                    if display_tick % 30 == 0 {
+                        let online =
+                            tokio::task::spawn_blocking(check_internet).await.unwrap_or(false);
+                        if online && !was_online {
+                            info!("Internet available");
+                            if let Err(e) = agent.plugins.on_internet_available().await {
+                                warn!("Plugin on_internet_available error: {}", e);
+                            }
+                        }
+                        was_online = online;
+                    }
+
                     let uptime = format!("{}s", agent.start.elapsed().as_secs());
                     let stats = agent.personality.stats();
-                    let phrase = agent.personality.get_phrase(agent.current_mood());
+                    let phrase = agent.current_phrase().to_string();
                     let aps_count = agent.aps_count();
+                    let mode = if manual { "MANU" } else { "AUTO" };
                     let peers: Vec<pwncore::Peer> = mesh_manager
                         .active_peers()
                         .await
@@ -899,6 +1067,34 @@ async fn main() -> anyhow::Result<()> {
                     } else {
                         format!("{}\u{2588}", config.main.name)
                     };
+                    // Dirty-track the semantically meaningful state so we
+                    // can skip the physical e-ink update when nothing
+                    // actually changed (partial refreshes still contribute
+                    // to panel wear over time).  Uptime and the blinking
+                    // cursor are excluded: they change every tick but
+                    // don't warrant a panel refresh.  A forced refresh
+                    // every 30 ticks prevents a truly static screen from
+                    // looking locked-up.
+                    let snap = DisplaySnap {
+                        channel: agent.current_channel(),
+                        aps: aps_count,
+                        mood: format!("{:?}", agent.current_mood()),
+                        phrase: phrase.clone(),
+                        handshakes: agent.epoch_tracker.current.handshakes_this_epoch,
+                        total: stats.handshakes,
+                        level: stats.level,
+                        xp: stats.xp,
+                        friend: friend
+                            .as_ref()
+                            .map(|(f, l)| (f.clone(), l.clone())),
+                    };
+                    let dirty = snap != last_display || display_force >= 30;
+                    if dirty {
+                        last_display = snap;
+                        display_force = 0;
+                    } else {
+                        display_force += 1;
+                    }
                     // Both display calls below are wrapped in a timeout.
                     // epd-waveshare's wait_until_idle (the real SPI/GPIO
                     // BUSY-line poll under `draw_pwnagotchi_frame`/`update`)
@@ -926,7 +1122,7 @@ async fn main() -> anyhow::Result<()> {
                             stats.handshakes,
                             stats.level,
                             stats.xp,
-                            "AUTO",
+                            mode,
                             friend
                                 .as_ref()
                                 .map(|(face, line)| (face.as_str(), line.as_str())),
@@ -940,22 +1136,27 @@ async fn main() -> anyhow::Result<()> {
                         ),
                         Ok(Err(e)) => warn!("Display draw failed: {}", e),
                         Ok(Ok(())) => {
-                            // Publish the freshly-drawn frame to the web UI's
-                            // live view (`/ui`) before pushing it to the panel,
-                            // so the browser mirrors exactly what the e-ink shows
-                            // -- the same model as real pwnagotchi's PNG frame.
+                            // Always publish the freshly-drawn frame to the
+                            // web UI live view regardless of dirty status --
+                            // the browser cache is cheap even when we skip
+                            // the physical e-ink update.
                             if let Some(ref state_arc) = web_state {
                                 if let Ok(png) = d.frame_png().await {
                                     state_arc.write().await.frame_png = png;
                                 }
                             }
-                            match tokio::time::timeout(DISPLAY_OP_TIMEOUT, d.update(true)).await {
-                                Err(_) => warn!(
-                                    "Display update timed out after {:?} (possible stuck BUSY line)",
-                                    DISPLAY_OP_TIMEOUT
-                                ),
-                                Ok(Err(e)) => warn!("Display update failed: {}", e),
-                                Ok(Ok(())) => {}
+                            // Only push to the physical e-ink panel when
+                            // the semantically meaningful state changed or
+                            // the periodic force timer elapsed.
+                            if dirty {
+                                match tokio::time::timeout(DISPLAY_OP_TIMEOUT, d.update(true)).await {
+                                    Err(_) => warn!(
+                                        "Display update timed out after {:?} (possible stuck BUSY line)",
+                                        DISPLAY_OP_TIMEOUT
+                                    ),
+                                    Ok(Err(e)) => warn!("Display update failed: {}", e),
+                                    Ok(Ok(())) => {}
+                                }
                             }
                         }
                     }
