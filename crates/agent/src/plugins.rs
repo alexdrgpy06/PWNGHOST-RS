@@ -354,32 +354,83 @@ impl PluginManager {
     pub fn set_agent_globals(&self, agent_ref: &AgentRef) {
         for (name, plugin) in &self.plugins {
             let globals = plugin.lua.globals();
-            let table = plugin.lua.create_table().unwrap();
+            let table = match plugin.lua.create_table() {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!("Plugin {} create_table error: {}", name, e);
+                    continue;
+                }
+            };
 
-            let _ = table.set("mood", agent_ref.mood.clone());
-            let _ = table.set("channel", agent_ref.current_channel as u64);
-            let _ = table.set("aps_count", agent_ref.aps_count as u64);
-            let _ = table.set("handshakes", agent_ref.handshakes);
-            let _ = table.set("total_handshakes", agent_ref.total_handshakes);
-            let _ = table.set("epoch", agent_ref.current_epoch);
-            let _ = table.set("level", agent_ref.level);
-            let _ = table.set("xp", agent_ref.xp);
-            let _ = table.set("uptime", agent_ref.uptime);
-            let _ = table.set("name", agent_ref.name.clone());
+            if let Err(e) = table.set("mood", agent_ref.mood.clone()) {
+                warn!("Plugin {} set agent.mood error: {}", name, e);
+            }
+            if let Err(e) = table.set("channel", agent_ref.current_channel as u64) {
+                warn!("Plugin {} set agent.channel error: {}", name, e);
+            }
+            if let Err(e) = table.set("aps_count", agent_ref.aps_count as u64) {
+                warn!("Plugin {} set agent.aps_count error: {}", name, e);
+            }
+            if let Err(e) = table.set("handshakes", agent_ref.handshakes) {
+                warn!("Plugin {} set agent.handshakes error: {}", name, e);
+            }
+            if let Err(e) = table.set("total_handshakes", agent_ref.total_handshakes) {
+                warn!("Plugin {} set agent.total_handshakes error: {}", name, e);
+            }
+            if let Err(e) = table.set("epoch", agent_ref.current_epoch) {
+                warn!("Plugin {} set agent.epoch error: {}", name, e);
+            }
+            if let Err(e) = table.set("level", agent_ref.level) {
+                warn!("Plugin {} set agent.level error: {}", name, e);
+            }
+            if let Err(e) = table.set("xp", agent_ref.xp) {
+                warn!("Plugin {} set agent.xp error: {}", name, e);
+            }
+            if let Err(e) = table.set("uptime", agent_ref.uptime) {
+                warn!("Plugin {} set agent.uptime error: {}", name, e);
+            }
+            if let Err(e) = table.set("name", agent_ref.name.clone()) {
+                warn!("Plugin {} set agent.name error: {}", name, e);
+            }
 
             // Peers as array of tables
-            let peers_table = plugin.lua.create_table().unwrap();
+            let peers_table = match plugin.lua.create_table() {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!("Plugin {} create peers_table error: {}", name, e);
+                    continue;
+                }
+            };
             for (i, peer) in agent_ref.peers.iter().enumerate() {
-                let peer_table = plugin.lua.create_table().unwrap();
-                let _ = peer_table.set("mac", peer.mac.clone());
-                let _ = peer_table.set("name", peer.name.clone());
-                let _ = peer_table.set("channel", peer.channel as u64);
-                let _ = peer_table.set("mood", peer.mood.clone());
-                let _ = peer_table.set("level", peer.level);
-                let _ = peer_table.set("handshakes", 0u32);
-                let _ = peers_table.set(i + 1, peer_table);
+                let peer_table = match plugin.lua.create_table() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        warn!("Plugin {} create peer_table error: {}", name, e);
+                        continue;
+                    }
+                };
+                if let Err(e) = peer_table.set("mac", peer.mac.clone()) {
+                    warn!("Plugin {} set peer.mac error: {}", name, e);
+                }
+                if let Err(e) = peer_table.set("name", peer.name.clone()) {
+                    warn!("Plugin {} set peer.name error: {}", name, e);
+                }
+                if let Err(e) = peer_table.set("channel", peer.channel as u64) {
+                    warn!("Plugin {} set peer.channel error: {}", name, e);
+                }
+                if let Err(e) = peer_table.set("mood", peer.mood.clone()) {
+                    warn!("Plugin {} set peer.mood error: {}", name, e);
+                }
+                if let Err(e) = peer_table.set("level", peer.level) {
+                    warn!("Plugin {} set peer.level error: {}", name, e);
+                }
+                if let Err(e) = peers_table.set(i + 1, peer_table) {
+                    warn!("Plugin {} set peers[{}] error: {}", name, i + 1, e);
+                }
             }
-            let _ = table.set("peers", peers_table);
+            if let Err(e) = table.set("peers", peers_table) {
+                warn!("Plugin {} set agent.peers error: {}", name, e);
+            }
 
             if let Err(e) = globals.set("agent", table) {
                 warn!("Plugin {} set_agent_globals error: {}", name, e);
