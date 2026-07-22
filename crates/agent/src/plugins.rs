@@ -365,34 +365,34 @@ impl PluginManager {
     }
 
     pub fn on_peer_detected(&self, mac: &str, name: &str, channel: u8) {
-        for (_, plugin) in &self.plugins {
+        for (pname, plugin) in &self.plugins {
             let globals = plugin.lua.globals();
             if let Err(e) = globals
                 .set("peer_mac", mac)
                 .and_then(|_| globals.set("peer_name", name))
                 .and_then(|_| globals.set("peer_channel", channel as u64))
             {
-                warn!("Plugin on_peer_detected context error: {}", e);
+                warn!("Plugin {} on_peer_detected context error: {}", pname, e);
                 continue;
             }
             if let Err(e) = plugin.execute("on_peer_detected") {
-                warn!("Plugin on_peer_detected error: {}", e);
+                warn!("Plugin {} on_peer_detected error: {}", pname, e);
             }
         }
     }
 
     pub fn on_peer_lost(&self, mac: &str, name: &str) {
-        for (_, plugin) in &self.plugins {
+        for (pname, plugin) in &self.plugins {
             let globals = plugin.lua.globals();
             if let Err(e) = globals
                 .set("peer_mac", mac)
                 .and_then(|_| globals.set("peer_name", name))
             {
-                warn!("Plugin on_peer_lost context error: {}", e);
+                warn!("Plugin {} on_peer_lost context error: {}", pname, e);
                 continue;
             }
             if let Err(e) = plugin.execute("on_peer_lost") {
-                warn!("Plugin on_peer_lost error: {}", e);
+                warn!("Plugin {} on_peer_lost error: {}", pname, e);
             }
         }
     }

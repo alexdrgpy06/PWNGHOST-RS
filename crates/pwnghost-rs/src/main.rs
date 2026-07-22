@@ -607,7 +607,7 @@ async fn main() -> anyhow::Result<()> {
     let mut last_display = DisplaySnap::default();
     let mut display_force = 0u32;
     let mut was_online = false;
-    let mut previous_peer_macs: Vec<String> = Vec::new();
+    let mut previous_peers: Vec<(String, String)> = Vec::new();
 
     // systemd watchdog ping. Harmless if the unit doesn't set
     // `WatchdogSec=`; ready to use as soon as it does.
@@ -785,22 +785,22 @@ async fn main() -> anyhow::Result<()> {
                 agent.update_peers(peers.clone());
 
                 // Peer diff for on_peer_detected / on_peer_lost
-                let peer_macs: Vec<String> = peers.iter().map(|p| p.mac.to_string()).collect();
+                let current_peers: Vec<(String, String)> = peers
+                    .iter()
+                    .map(|p| (p.mac.to_string(), p.name.clone()))
+                    .collect();
                 for peer in &peers {
-                    if !previous_peer_macs.contains(&peer.mac.to_string()) {
-                        agent.plugins.on_peer_detected(
-                            &peer.mac.to_string(),
-                            &peer.name,
-                            peer.channel,
-                        );
+                    let mac = peer.mac.to_string();
+                    if !previous_peers.iter().any(|(m, _)| m == &mac) {
+                        agent.plugins.on_peer_detected(&mac, &peer.name, peer.channel);
                     }
                 }
-                for prev_mac in &previous_peer_macs {
-                    if !peer_macs.contains(prev_mac) {
-                        agent.plugins.on_peer_lost(prev_mac, "");
+                for (prev_mac, prev_name) in &previous_peers {
+                    if !current_peers.iter().any(|(m, _)| m == prev_mac) {
+                        agent.plugins.on_peer_lost(prev_mac, prev_name);
                     }
                 }
-                previous_peer_macs = peer_macs;
+                previous_peers = current_peers;
 
                 // Run the on_epoch hook for every loaded Lua plugin, reporting
                 // the epoch that just finished (real counts, from history)
