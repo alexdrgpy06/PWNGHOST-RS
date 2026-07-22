@@ -17,11 +17,13 @@ pub use healing::{Healer, HealingAction, HealingConfig, HealingLayer};
 pub use identity::Identity;
 pub use mesh::{MeshManager, MeshPeer, MeshPeerInfo};
 pub use personality::Personality;
-pub use plugins::{LuaPlugin, PluginApi, PluginManager};
+pub use plugins::{AgentRef, LuaPlugin, PeerInfo, PluginApi, PluginManager};
 
 use chrono::{DateTime, Utc};
 use mac_addr::MacAddr;
 use pwncore::{AccessPoint, Channel, Mood, Peer as CorePeer};
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -36,9 +38,50 @@ pub struct Agent {
 
     // Current state
     current_mood: Mood,
+    /// The status-line phrase for `current_mood`, re-rolled only when the
+    /// mood actually transitions (see `tick()`) rather than every call --
+    /// real pwnagotchi picks a phrase once per mood-transition event (each
+    /// `Automata::set_X()` calls `View.on_X()` exactly once), not on every
+    /// render tick. Re-rolling every tick (this project's display refreshes
+    /// at ~1Hz) would make the status line flicker between random phrases
+    /// every second instead of holding steady until something actually
+    /// changes.
+    current_phrase: String,
     aps: Vec<AccessPoint>,
     peers: Vec<CorePeer>,
     current_channel: u8,
+
+    /// SSIDs and/or MAC addresses (real pwnagotchi's `main.whitelist` mixes
+    /// both) that `find_target` must never select as a deauth/associate
+    /// target. Set once from `config.main.whitelist` after construction --
+    /// see `is_whitelisted` for why this wasn't consulted at all before.
+    pub whitelist: Vec<String>,
+
+    /// Per-BSSID interaction counter, mirroring real pwnagotchi's
+    /// `Agent._history`/`_should_interact`: `personality.max_interactions`
+    /// caps how many times the same AP can be offered as a deauth/associate
+    /// target before `find_target` stops selecting it. Without this, an AP
+    /// that never yields a handshake (WPA3-only, deauth-resistant client,
+    /// etc.) could monopolize every future action slot forever, since
+    /// nothing else made `find_target` move on to a different candidate.
+    /// Was fully configurable (`PersonalityConfig::max_interactions`,
+    /// present in schema/migrate/defaults.toml) but never actually
+    /// consulted anywhere -- another instance of the "config exists, never
+    /// wired up" pattern found repeatedly this session.
+    interaction_history: HashMap<MacAddr, u32>,
+
+    /// Timestamp of the last deauth command sent, used to enforce
+    /// `personality.throttle` (minimum seconds between deauths to
+    /// prevent Broadcom firmware freeze from rapid-fire injection).
+    /// OG pwnagotchi uses the same throttle mechanism to protect the
+    /// BCM43430/BCM43436 chips from Nexmon injection lockups.
+    /// `Cell` provides interior mutability so the check can live in
+    /// the otherwise-immutable `select_action_heuristic`.
+    last_deauth: Cell<Option<Instant>>,
+
+    /// Timestamp of the last association command sent, same throttle
+    /// protection as deauth.
+    last_assoc: Cell<Option<Instant>>,
 
     // Timing
     pub start: Instant,
@@ -61,9 +104,14 @@ impl Agent {
             running: false,
             healer: Healer::new(),
             current_mood: Mood::Awake,
+            current_phrase: Mood::Awake.voice_line().to_string(),
             aps: Vec::new(),
             peers: Vec::new(),
             current_channel: 1,
+            whitelist: Vec::new(),
+            interaction_history: HashMap::new(),
+            last_deauth: Cell::new(None),
+            last_assoc: Cell::new(None),
             start: Instant::now(),
             started_at: Utc::now(),
             plugins: PluginManager::new(),
@@ -117,12 +165,46 @@ impl Agent {
         }
 
         // Compute mood from epoch state
-        self.current_mood = self
+        let new_mood = self
             .personality
             .compute_mood(&self.epoch_tracker.current, &self.peers);
+        if new_mood != self.current_mood {
+            // Provide runtime context for voice-line interpolation
+            // ({name}, {ap}, {sta} placeholders).  Peer name is the
+            // closest/most-relevant peer; AP name is the SSID of the
+            // first visible access point.
+            let peer_name = self.peers.first().map(|p| p.name.as_str());
+            let ap_name = self
+                .aps
+                .first()
+                .and_then(|ap| ap.ssid.as_deref());
+            self.current_phrase = new_mood.voice_line_with_context(peer_name, ap_name, None);
+        }
+        self.current_mood = new_mood;
 
         // Select action based on state
         let action = self.select_action();
+
+        // Record the interaction against the per-target cap now that an
+        // action was actually chosen (see `interaction_history`'s field doc
+        // comment) -- `find_target` only *checks* the cap; this is what
+        // increments it. Also update rate-limit timestamps so the throttle
+        // starts counting from now for the next tick.
+        match &action {
+            AgentAction::Deauth(bssid) => {
+                if let Ok(mac) = bssid.parse::<MacAddr>() {
+                    self.record_interaction(mac);
+                }
+                self.last_deauth.set(Some(Instant::now()));
+            }
+            AgentAction::Associate(bssid) => {
+                if let Ok(mac) = bssid.parse::<MacAddr>() {
+                    self.record_interaction(mac);
+                }
+                self.last_assoc.set(Some(Instant::now()));
+            }
+            _ => {}
+        }
 
         // Get face for current mood
         let face = face_for_mood(self.current_mood);
@@ -205,17 +287,20 @@ impl Agent {
         let features = self.build_features();
         let p = self.personality.config();
 
+        let not_deauth_throttled = !Self::is_throttled(&self.last_deauth, p.throttle);
+        let not_assoc_throttled = !Self::is_throttled(&self.last_assoc, p.throttle);
+
         match guard.select_action(&features) {
             rl_agent::RlAction::HopChannel(ch) => Some(AgentAction::Hop(ch.clamp(1, 13))),
-            rl_agent::RlAction::Deauth if p.deauth => self
-                .find_target()
+            rl_agent::RlAction::Deauth if p.deauth && not_deauth_throttled => self
+                .find_target(true)
                 .map(|t| AgentAction::Deauth(t.bssid.to_string())),
-            rl_agent::RlAction::Associate if p.associate => self
-                .find_target()
+            rl_agent::RlAction::Associate if p.associate && not_assoc_throttled => self
+                .find_target(false)
                 .map(|t| AgentAction::Associate(t.bssid.to_string())),
             rl_agent::RlAction::Wait => Some(AgentAction::Stay),
             rl_agent::RlAction::Sleep(secs) => Some(AgentAction::Sleep(secs as u64)),
-            // Deauth/Associate requested but disabled by personality config.
+            // Deauth/Associate requested but disabled or throttled.
             rl_agent::RlAction::Deauth | rl_agent::RlAction::Associate => None,
         }
     }
@@ -251,6 +336,16 @@ impl Agent {
         features
     }
 
+    /// Check whether a rate-limited action is still on cooldown.
+    /// `last` is the timestamp of the last action (deauth or assoc),
+    /// and `throttle` is the minimum interval from `personality.throttle` (u32 seconds).
+    fn is_throttled(last: &Cell<Option<Instant>>, throttle: u32) -> bool {
+        match last.get() {
+            None => false,
+            Some(t) => t.elapsed().as_secs() < throttle as u64,
+        }
+    }
+
     /// Heuristic action selection based on epoch state, mood, and
     /// personality. This is the fallback used when no RL model is loaded
     /// (or the RL policy declines to act), and is exactly the original
@@ -267,11 +362,30 @@ impl Agent {
         // Happy/excited/grateful: we have activity, check for targets
         match self.current_mood {
             Mood::Excited | Mood::Grateful | Mood::Motivated => {
-                if let Some(target) = self.find_target() {
-                    if p.deauth && !epoch.did_deauth {
+                // Deauth and associate now look for independently-eligible
+                // targets rather than sharing one `find_target()` call:
+                // a deauth candidate must have a detected client (see
+                // `find_target`'s doc comment), but the AP first in
+                // iteration order might not have one yet while a later,
+                // client-bearing AP does -- sharing one lookup meant a
+                // clientless AP could block both actions for the whole
+                // epoch even though associate never needed a client at all.
+                // Rate-liming: skip deauth if throttle hasn't elapsed since
+                // last one -- prevents Broadcom firmware freeze on Nexmon.
+                if p.deauth
+                    && !epoch.did_deauth
+                    && !Self::is_throttled(&self.last_deauth, p.throttle)
+                {
+                    if let Some(target) = self.find_target(true) {
                         return AgentAction::Deauth(target.bssid.to_string());
                     }
-                    if p.associate && !epoch.did_associate {
+                }
+                if p.associate
+                    && !epoch.did_associate
+                    && !Self::is_throttled(&self.last_assoc, p.throttle)
+                {
+
+                    if let Some(target) = self.find_target(false) {
                         return AgentAction::Associate(target.bssid.to_string());
                     }
                 }
@@ -302,8 +416,19 @@ impl Agent {
         }
     }
 
-    /// Find best target AP on current channel
-    fn find_target(&self) -> Option<&AccessPoint> {
+    /// Find best target AP on current channel. `requires_clients` gates
+    /// deauth-eligibility: bettercap's `wifi.deauth <BSSID>` collects every
+    /// currently-known client of that AP and deauths each one (confirmed
+    /// directly from bettercap's Go source, `modules/wifi/wifi_deauth.go`'s
+    /// `startDeauth`) -- if the AP has *no* detected clients yet, that same
+    /// source returns a hard error ("doesn't have detected clients") instead
+    /// of quietly doing nothing. Without this check, `find_target` could
+    /// repeatedly hand a clientless AP to the deauth branch, burning that
+    /// epoch's one deauth slot on a command that can never succeed while a
+    /// real deauth-capable target sits later in `self.aps`. Associate has no
+    /// such requirement (a PMKID can be captured from the AP directly, no
+    /// client needed), so callers pass `false` there.
+    fn find_target(&self, requires_clients: bool) -> Option<&AccessPoint> {
         let p = self.personality.config();
 
         for ap in &self.aps {
@@ -316,9 +441,77 @@ impl Agent {
             if ap.rssi < p.min_rssi {
                 continue;
             }
+            if requires_clients && ap.clients.is_empty() {
+                continue;
+            }
+            if !self.is_targetable(ap) {
+                continue;
+            }
+            if !self.interactions_remaining(ap.bssid) {
+                continue;
+            }
             return Some(ap);
         }
         None
+    }
+
+    /// Whether `bssid` may still be selected as a deauth/associate target,
+    /// per `personality.max_interactions`. See `interaction_history`'s
+    /// field doc comment.
+    fn interactions_remaining(&self, bssid: MacAddr) -> bool {
+        let count = self.interaction_history.get(&bssid).copied().unwrap_or(0);
+        count < self.personality.config().max_interactions
+    }
+
+    /// Record one deauth/associate interaction with `bssid`. See
+    /// `interaction_history`'s field doc comment.
+    fn record_interaction(&mut self, bssid: MacAddr) {
+        *self.interaction_history.entry(bssid).or_insert(0) += 1;
+    }
+
+    /// Whether `ap` is safe to target (i.e. is NOT protected by
+    /// `main.whitelist`). Named to avoid the ambiguity that "whitelist"
+    /// itself invites: despite the name, real pwnagotchi's `main.whitelist`
+    /// is a *protect-from-attack* exclude-list (its own docs: useful so you
+    /// don't deauth your own network, or a neighbor's, constantly), not an
+    /// allow-scope restricting targeting to only listed entries.
+    ///
+    /// Previously this wasn't checked at all: `AccessPoint::is_target`
+    /// existed, was unit-tested, and was never called from `find_target` --
+    /// the sole target-selection function for both the heuristic and RL
+    /// action-selection paths -- so a network a user explicitly whitelisted
+    /// would still get deauthed/associated. (A first attempt at this fix
+    /// also had the exclude-vs-allow-scope direction backwards, matching an
+    /// equally-backwards docstring `is_target` had at the time -- both are
+    /// now corrected together, with regression tests on both sides.)
+    ///
+    /// Real pwnagotchi's own `main.whitelist` mixes SSIDs and MAC addresses
+    /// in the same list (its own example config:
+    /// `["MyHomeNetwork", "aa:bb:cc:dd:ee:ff"]`), so this checks the SSID as
+    /// a plain string first, then falls back to `AccessPoint::is_target` for
+    /// whichever entries parse as a MAC address. It deliberately does NOT
+    /// call `is_target` when zero entries parse as a MAC: `is_target` treats
+    /// an *empty* whitelist slice as "nothing protected," which would
+    /// silently allow everything if every configured entry happened to be
+    /// an SSID -- the opposite of what a non-empty `main.whitelist` means.
+    fn is_targetable(&self, ap: &AccessPoint) -> bool {
+        if self.whitelist.is_empty() {
+            return true;
+        }
+        if let Some(ssid) = ap.ssid.as_deref() {
+            if self.whitelist.iter().any(|w| w == ssid) {
+                return false;
+            }
+        }
+        let whitelist_macs: Vec<MacAddr> = self
+            .whitelist
+            .iter()
+            .filter_map(|w| w.parse().ok())
+            .collect();
+        if !whitelist_macs.is_empty() {
+            return ap.is_target(&whitelist_macs, &[]);
+        }
+        true
     }
 
     fn next_channel(current: u8) -> u8 {
@@ -332,14 +525,40 @@ impl Agent {
         self.current_mood
     }
 
+    /// Current status-line phrase, held steady since the last mood
+    /// transition (see the `current_phrase` field doc comment).
+    pub fn current_phrase(&self) -> &str {
+        &self.current_phrase
+    }
+
     /// Get current face
     pub fn current_face(&self) -> &'static str {
         face_for_mood(self.current_mood)
     }
 
-    /// Update AP list (called from event handler)
-    pub fn update_aps(&mut self, aps: Vec<AccessPoint>) {
-        self.aps = aps;
+    /// Update AP list from a fresh bettercap poll, merging each observation
+    /// via `add_or_update_ap` and awarding `reward_new_ap` XP for every
+    /// genuinely new BSSID. Returns the APs that were newly discovered this
+    /// call, so the caller can surface them (e.g. the WebUI's live activity
+    /// feed).
+    ///
+    /// Previously this did a wholesale `self.aps = aps` replace, which never
+    /// distinguished a new AP from an already-known one -- `add_or_update_ap`
+    /// (which returns that distinction) existed and was unit-tested, but sat
+    /// marked `#[allow(dead_code)]`, never called from anywhere. Confirmed
+    /// on real hardware after the nexmon monitor-mode fix started producing
+    /// real AP data: `aps` correctly reported 14 real access points, but
+    /// `xp`/`level` stayed at 0 the whole time, since nothing ever called
+    /// `Personality::update_on_new_ap`.
+    pub fn update_aps(&mut self, aps: Vec<AccessPoint>) -> Vec<AccessPoint> {
+        let mut new_aps = Vec::new();
+        for ap in aps {
+            if self.add_or_update_ap(ap.clone()) {
+                self.personality.update_on_new_ap();
+                new_aps.push(ap);
+            }
+        }
+        new_aps
     }
 
     /// Update peer list
@@ -368,12 +587,15 @@ impl Agent {
         self.aps.len()
     }
 
+    /// Access the current AP list (for plugin hooks / web UI / status).
+    pub fn aps(&self) -> &[AccessPoint] {
+        &self.aps
+    }
+
     /// Merge one AP observation into `self.aps`, updating in place if we've
-    /// already seen this BSSID. Fed real data since Phase 1 by
-    /// `bettercap::WifiSession::to_pwncore` via `update_aps` in
-    /// `pwnghost-rs`'s main loop (previously unreachable: AngryOxide exposed
-    /// no AP data over its CLI/stdout interface at all).
-    #[allow(dead_code)]
+    /// already seen this BSSID and returning whether it was new. Called from
+    /// `update_aps`, which is fed real data by `bettercap::WifiSession::
+    /// to_pwncore` via `pwnghost-rs`'s main loop.
     fn add_or_update_ap(&mut self, ap: AccessPoint) -> bool {
         if let Some(existing) = self.aps.iter_mut().find(|a| a.bssid == ap.bssid) {
             *existing = ap;
@@ -401,6 +623,12 @@ impl Agent {
         // matter how many real handshakes it captured.
         self.personality.update_on_handshake(bssid.octets());
         self.observe_rl_reward(1.0);
+        // Matches real pwnagotchi's `Voice.on_handshakes` -- a captured
+        // handshake gets its own celebratory line immediately, overriding
+        // whatever the current mood's generic phrase would say, rather than
+        // waiting for the next mood transition to (eventually) pick a
+        // Happy/Excited/Grateful line from the generic pool.
+        self.current_phrase = "Cool, we got a new handshake!".to_string();
     }
 
     /// Feed a reward signal to the loaded RL policy for whatever action it
@@ -527,6 +755,117 @@ mod tests {
                 | AgentAction::Associate(_)
                 | AgentAction::Sleep(_)
         );
+    }
+
+    #[test]
+    fn test_find_target_skips_whitelisted_bssid() {
+        // Regression test: `find_target` previously never consulted
+        // `whitelist` at all -- a whitelisted AP would still get selected
+        // as a deauth/associate target.
+        let mut agent = Agent::default();
+        agent.start();
+        let bssid: MacAddr = "aa:bb:cc:dd:ee:ff".parse().unwrap();
+        let ap = AccessPoint::new(bssid, 1, -50, pwncore::EncryptionType::Wpa2, "test".into());
+        agent.aps = vec![ap];
+        agent.whitelist = vec!["aa:bb:cc:dd:ee:ff".to_string()];
+
+        assert!(agent.find_target(false).is_none());
+    }
+
+    #[test]
+    fn test_find_target_skips_whitelisted_ssid() {
+        let mut agent = Agent::default();
+        agent.start();
+        let bssid: MacAddr = "aa:bb:cc:dd:ee:ff".parse().unwrap();
+        let mut ap = AccessPoint::new(bssid, 1, -50, pwncore::EncryptionType::Wpa2, "test".into());
+        ap.ssid = Some("MyHomeNetwork".to_string());
+        agent.aps = vec![ap];
+        agent.whitelist = vec!["MyHomeNetwork".to_string()];
+
+        assert!(agent.find_target(false).is_none());
+    }
+
+    #[test]
+    fn test_find_target_allows_non_whitelisted_ap_when_whitelist_set() {
+        // The whitelist only protects *listed* APs -- an unrelated AP
+        // (not in the list) must remain a perfectly valid target.
+        let mut agent = Agent::default();
+        agent.start();
+        let bssid: MacAddr = "11:22:33:44:55:66".parse().unwrap();
+        let ap = AccessPoint::new(bssid, 1, -50, pwncore::EncryptionType::Wpa2, "test".into());
+        agent.aps = vec![ap];
+        agent.whitelist = vec!["aa:bb:cc:dd:ee:ff".to_string()];
+
+        assert!(agent.find_target(false).is_some());
+    }
+
+    #[test]
+    fn test_find_target_allows_all_when_whitelist_empty() {
+        let mut agent = Agent::default();
+        agent.start();
+        let bssid: MacAddr = "aa:bb:cc:dd:ee:ff".parse().unwrap();
+        let ap = AccessPoint::new(bssid, 1, -50, pwncore::EncryptionType::Wpa2, "test".into());
+        agent.aps = vec![ap];
+
+        assert!(agent.find_target(false).is_some());
+    }
+
+    #[test]
+    fn test_find_target_requires_clients_when_gated_for_deauth() {
+        // bettercap's `wifi.deauth <BSSID>` errors ("doesn't have detected
+        // clients") when the AP has none -- `find_target(true)` (the deauth
+        // path) must skip clientless APs so that error can't burn the
+        // epoch's one deauth slot on a target that could never succeed.
+        let mut agent = Agent::default();
+        agent.start();
+        let bssid: MacAddr = "aa:bb:cc:dd:ee:ff".parse().unwrap();
+        let ap = AccessPoint::new(bssid, 1, -50, pwncore::EncryptionType::Wpa2, "test".into());
+        agent.aps = vec![ap];
+
+        assert!(agent.find_target(true).is_none());
+        // Associate has no client requirement (a PMKID can be captured
+        // straight from the AP), so the same clientless AP is still a
+        // valid associate target.
+        assert!(agent.find_target(false).is_some());
+    }
+
+    #[test]
+    fn test_find_target_selects_ap_with_clients_when_gated_for_deauth() {
+        let mut agent = Agent::default();
+        agent.start();
+        let bssid: MacAddr = "aa:bb:cc:dd:ee:ff".parse().unwrap();
+        let mut ap = AccessPoint::new(bssid, 1, -50, pwncore::EncryptionType::Wpa2, "test".into());
+        let sta_mac: MacAddr = "11:22:33:44:55:66".parse().unwrap();
+        ap.add_client(pwncore::Station::new(sta_mac, "test".into(), -50, 1));
+        agent.aps = vec![ap];
+
+        let target = agent.find_target(true);
+        assert!(target.is_some());
+        assert_eq!(target.unwrap().bssid, bssid);
+    }
+
+    #[test]
+    fn test_find_target_stops_selecting_ap_after_max_interactions() {
+        // Regression test: `max_interactions` was fully configurable
+        // (schema, migrate, defaults.toml) but never consulted anywhere --
+        // without this cap, a single AP that never yields a handshake
+        // could monopolize every future deauth/associate slot forever.
+        let p = crate::personality::PersonalityConfig {
+            max_interactions: 2,
+            ..Default::default()
+        };
+        let mut agent = Agent::new(Personality::new(p));
+        agent.start();
+        let bssid: MacAddr = "aa:bb:cc:dd:ee:ff".parse().unwrap();
+        let ap = AccessPoint::new(bssid, 1, -50, pwncore::EncryptionType::Wpa2, "test".into());
+        agent.aps = vec![ap];
+
+        assert!(agent.find_target(false).is_some());
+        agent.record_interaction(bssid);
+        assert!(agent.find_target(false).is_some());
+        agent.record_interaction(bssid);
+        // Cap reached (2/2) -- no longer offered as a target.
+        assert!(agent.find_target(false).is_none());
     }
 
     #[test]

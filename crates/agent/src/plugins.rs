@@ -18,8 +18,13 @@ pub struct AgentRef {
     pub current_channel: u8,
     pub aps_count: usize,
     pub handshakes: u32,
+    pub total_handshakes: u32,
     pub mood: String,
     pub peers: Vec<PeerInfo>,
+    pub level: u32,
+    pub xp: u32,
+    pub uptime: u64,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -259,6 +264,127 @@ impl PluginManager {
             }
         }
         Ok(())
+    }
+
+    /// Invoke the `on_association` hook of every loaded plugin.
+    /// Sets `assoc_bssid` and `assoc_ssid` Lua globals before calling.
+    /// Matches real pwnagotchi's plugin hook of the same name.
+    pub async fn on_association(&self, bssid: &str, ssid: &str) -> Result<()> {
+        for (name, plugin) in &self.plugins {
+            let globals = plugin.lua.globals();
+            if let Err(e) = globals
+                .set("assoc_bssid", bssid)
+                .and_then(|_| globals.set("assoc_ssid", ssid))
+            {
+                warn!("Plugin {} on_association context error: {}", name, e);
+                continue;
+            }
+            if let Err(e) = plugin.execute("on_association") {
+                warn!("Plugin {} on_association error: {}", name, e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Invoke the `on_deauthentication` hook of every loaded plugin.
+    /// Sets `deauth_bssid`, `deauth_ssid`, and `deauth_sta` Lua globals.
+    /// Matches real pwnagotchi's plugin hook of the same name.
+    pub async fn on_deauthentication(
+        &self,
+        bssid: &str,
+        ssid: &str,
+        sta: &str,
+    ) -> Result<()> {
+        for (name, plugin) in &self.plugins {
+            let globals = plugin.lua.globals();
+            if let Err(e) = globals
+                .set("deauth_bssid", bssid)
+                .and_then(|_| globals.set("deauth_ssid", ssid))
+                .and_then(|_| globals.set("deauth_sta", sta))
+            {
+                warn!("Plugin {} on_deauthentication context error: {}", name, e);
+                continue;
+            }
+            if let Err(e) = plugin.execute("on_deauthentication") {
+                warn!("Plugin {} on_deauthentication error: {}", name, e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Invoke the `on_channel_hop` hook of every loaded plugin.
+    /// Sets `old_channel` and `new_channel` Lua globals.
+    /// Matches real pwnagotchi's plugin hook of the same name.
+    pub async fn on_channel_hop(&self, old_ch: u8, new_ch: u8) -> Result<()> {
+        for (name, plugin) in &self.plugins {
+            let globals = plugin.lua.globals();
+            if let Err(e) = globals
+                .set("old_channel", old_ch)
+                .and_then(|_| globals.set("new_channel", new_ch))
+            {
+                warn!("Plugin {} on_channel_hop context error: {}", name, e);
+                continue;
+            }
+            if let Err(e) = plugin.execute("on_channel_hop") {
+                warn!("Plugin {} on_channel_hop error: {}", name, e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Invoke the `on_internet_available` hook of every loaded plugin.
+    /// No additional Lua globals are set (the plugin can use the existing
+    /// `epoch`/`status_json` context). Matches real pwnagotchi's plugin
+    /// hook of the same name, used by `bt_tether` to know when it can
+    /// sync, and by `grid` to announce via the web API.
+    pub async fn on_internet_available(&self) -> Result<()> {
+        for (name, plugin) in &self.plugins {
+            if let Err(e) = plugin.execute("on_internet_available") {
+                warn!("Plugin {} on_internet_available error: {}", name, e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Set the `agent` Lua global table on every loaded plugin.
+    /// Fields mirror the OG pwnagotchi `agent` object that plugin
+    /// hook callbacks receive — plugins reference `agent.mood`,
+    /// `agent.channel`, etc.  Called at the start of every hook
+    /// invocation so plugins always see fresh state.
+    pub fn set_agent_globals(&self, agent_ref: &AgentRef) {
+        for (name, plugin) in &self.plugins {
+            let globals = plugin.lua.globals();
+            let table = plugin.lua.create_table().unwrap();
+
+            let _ = table.set("mood", agent_ref.mood.clone());
+            let _ = table.set("channel", agent_ref.current_channel as u64);
+            let _ = table.set("aps_count", agent_ref.aps_count as u64);
+            let _ = table.set("handshakes", agent_ref.handshakes);
+            let _ = table.set("total_handshakes", agent_ref.total_handshakes);
+            let _ = table.set("epoch", agent_ref.current_epoch);
+            let _ = table.set("level", agent_ref.level);
+            let _ = table.set("xp", agent_ref.xp);
+            let _ = table.set("uptime", agent_ref.uptime);
+            let _ = table.set("name", agent_ref.name.clone());
+
+            // Peers as array of tables
+            let peers_table = plugin.lua.create_table().unwrap();
+            for (i, peer) in agent_ref.peers.iter().enumerate() {
+                let peer_table = plugin.lua.create_table().unwrap();
+                let _ = peer_table.set("mac", peer.mac.clone());
+                let _ = peer_table.set("name", peer.name.clone());
+                let _ = peer_table.set("channel", peer.channel as u64);
+                let _ = peer_table.set("mood", peer.mood.clone());
+                let _ = peer_table.set("level", peer.level);
+                let _ = peer_table.set("handshakes", 0u32);
+                let _ = peers_table.set(i + 1, peer_table);
+            }
+            let _ = table.set("peers", peers_table);
+
+            if let Err(e) = globals.set("agent", table) {
+                warn!("Plugin {} set_agent_globals error: {}", name, e);
+            }
+        }
     }
 
     pub fn list_plugins(&self) -> Vec<String> {
