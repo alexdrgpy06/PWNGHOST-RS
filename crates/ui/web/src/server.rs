@@ -4,7 +4,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::{
     extract::State,
     response::Html,
-    routing::{get, post},
+    routing::{any, get, post},
     Router,
 };
 use std::sync::Arc;
@@ -15,8 +15,8 @@ use tracing::info;
 
 use crate::api::{
     get_config, get_cracked, get_handshakes, get_peers, get_plugins, get_session, get_status,
-    get_ui_frame, get_wpa_sec_cracked, toggle_plugin, update_config, update_plugin_options,
-    AppState,
+    get_ui_frame, get_wpa_sec_cracked, plugin_webhook, reboot_system, toggle_plugin,
+    update_config, update_plugin_options, AppState,
 };
 
 /// Create the web application router
@@ -32,6 +32,10 @@ pub fn create_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/api/plugins", get(get_plugins))
         .route("/api/plugins/:name/toggle", post(toggle_plugin))
         .route("/api/plugins/:name/options", post(update_plugin_options))
+        // Accept any HTTP method (GET, POST, etc.) so Lua plugins can
+        // define REST-style handlers without method restrictions.
+        .route("/api/plugins/:name/webhook/:path", any(plugin_webhook))
+        .route("/api/reboot", post(reboot_system))
         // Live e-ink frame as PNG, polled ~1s by the dashboard -- the same
         // "live view" real pwnagotchi serves at `/ui`.
         .route("/ui", get(get_ui_frame))

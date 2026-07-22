@@ -2,8 +2,10 @@
 
 use axum::{
     extract::{Path, State},
+    http::{Method, StatusCode},
     Json,
 };
+use axum::body::Bytes;
 use pwncore::AccessPoint;
 use serde::Serialize;
 use std::sync::Arc;
@@ -63,7 +65,7 @@ pub async fn get_cracked(State(state): State<Arc<RwLock<AppState>>>) -> Json<Vec
             }
         }
     }
-    out.sort_by(|a, b| b.cracked_at.cmp(&a.cracked_at));
+    out.sort_by_key(|b| std::cmp::Reverse(b.cracked_at));
     Json(out)
 }
 
@@ -243,6 +245,7 @@ pub struct SessionResponse {
     pub channel: u8,
     pub mood: String,
     pub face: String,
+    pub phrase: String,
     pub level: u32,
     pub xp: u32,
     pub peers: usize,
@@ -258,6 +261,7 @@ pub async fn get_session(State(state): State<Arc<RwLock<AppState>>>) -> Json<Ses
         channel: state.current_channel,
         mood: format!("{:?}", state.mood),
         face: state.face.clone(),
+        phrase: state.phrase.clone(),
         level: state.level,
         xp: state.xp,
         peers: state.peers.len(),
@@ -390,6 +394,7 @@ pub struct StatusResponse {
     pub epoch: u64,
     pub mood: String,
     pub face: String,
+    pub phrase: String,
     pub channel: u8,
     pub aps: usize,
     pub handshakes: u32,
@@ -410,6 +415,7 @@ pub async fn get_status(State(state): State<Arc<RwLock<AppState>>>) -> Json<Stat
         epoch: state.epoch,
         mood: format!("{:?}", state.mood),
         face: state.face.clone(),
+        phrase: state.phrase.clone(),
         channel: state.current_channel,
         aps: state.aps.len(),
         handshakes: state.handshakes,
@@ -424,6 +430,34 @@ pub async fn get_status(State(state): State<Arc<RwLock<AppState>>>) -> Json<Stat
     })
 }
 
+/// Reboots the device via `systemctl reboot` -- goes through the same
+/// systemd shutdown path (and this project's own system-shutdown hook,
+/// `safe-shutdown.sh`, that flushes the zram-backed log/data mounts first)
+/// as any other reboot, rather than calling the `reboot(2)` syscall
+/// directly, which pwnghost-rs.service's CapabilityBoundingSet doesn't
+/// grant (no CAP_SYS_BOOT) -- systemd itself performs the actual syscall
+/// on our behalf over D-Bus, so this works despite that restriction.
+pub async fn reboot_system() -> Json<serde_json::Value> {
+    match tokio::process::Command::new("systemctl")
+        .arg("reboot")
+        .spawn()
+    {
+        Ok(_) => Json(serde_json::json!({"status": "ok", "message": "rebooting"})),
+        Err(e) => Json(serde_json::json!({"status": "error", "message": e.to_string()})),
+    }
+}
+
+/// Request sent from the webhook route to the agent's main loop.
+/// The agent task processes this on its own thread (where `PluginManager`
+/// lives) and sends the response back via `reply`.
+pub struct WebhookRequest {
+    pub plugin_name: String,
+    pub path: String,
+    pub method: String,
+    pub body: String,
+    pub reply: tokio::sync::oneshot::Sender<(u16, String)>,
+}
+
 // Shared application state
 pub struct AppState {
     pub epoch: u64,
@@ -433,6 +467,11 @@ pub struct AppState {
     pub current_channel: u8,
     pub mood: pwncore::Mood,
     pub face: String,
+    /// Current status-line phrase (`Agent::current_phrase()`), re-rolled
+    /// only on mood transitions -- see that method's doc comment. Real
+    /// pwnagotchi surfaces this same text on both the e-ink display and the
+    /// web UI; this field is the WebUI's copy of it.
+    pub phrase: String,
     pub level: u32,
     pub xp: u32,
     pub peers: Vec<pwncore::Peer>,
@@ -461,6 +500,11 @@ pub struct AppState {
     /// Path `wpa_sec.lua` downloads the remote cracked potfile to (see
     /// `get_wpa_sec_cracked`). Defaults to the real path that plugin uses.
     pub wpa_sec_potfile: std::path::PathBuf,
+    /// Channel sender for dispatching webhook requests to the agent's main
+    /// loop. Set by `pwnghost-rs` main.rs to bridge the web server and the
+    /// Lua plugin manager without a direct crate dependency (avoids a
+    /// circular dep: `agent` → `ui` → `ui-web`).
+    pub webhook_tx: Option<tokio::sync::mpsc::Sender<WebhookRequest>>,
 }
 
 impl Default for AppState {
@@ -473,6 +517,7 @@ impl Default for AppState {
             current_channel: 1,
             mood: pwncore::Mood::Awake,
             face: "(◕‿‿◕)".to_string(),
+            phrase: String::new(),
             level: 0,
             xp: 0,
             peers: Vec::new(),
@@ -488,6 +533,7 @@ impl Default for AppState {
             frame_png: Vec::new(),
             cracked_dir: std::path::PathBuf::from("/var/tmp/pwnghost/pwncrack"),
             wpa_sec_potfile: std::path::PathBuf::from("/var/tmp/pwnghost/wpa-sec/potfile"),
+            webhook_tx: None,
         }
     }
 }
@@ -512,6 +558,49 @@ pub async fn get_ui_frame(State(state): State<Arc<RwLock<AppState>>>) -> axum::r
         png,
     )
         .into_response()
+}
+
+/// Route an HTTP request to a Lua plugin's `on_webhook` handler.
+/// Dispatches the request through a channel to the agent's main loop,
+/// which processes it on the same thread where `PluginManager` lives.
+pub async fn plugin_webhook(
+    Path((name, path)): Path<(String, String)>,
+    State(state): State<Arc<RwLock<AppState>>>,
+    method: Method,
+    body: Bytes,
+) -> impl axum::response::IntoResponse {
+    use axum::response::IntoResponse;
+
+    let body_str = String::from_utf8_lossy(&body).to_string();
+    let state = state.read().await;
+    let Some(tx) = &state.webhook_tx else {
+        return (StatusCode::NOT_FOUND, "Webhook not configured".to_string()).into_response();
+    };
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    let req = WebhookRequest {
+        plugin_name: name,
+        path,
+        method: method.as_str().to_string(),
+        body: body_str,
+        reply: reply_tx,
+    };
+    if tx.send(req).await.is_err() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Webhook channel closed".to_string(),
+        )
+            .into_response();
+    }
+    match reply_rx.await {
+        Ok((status, response)) => {
+            (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), response).into_response()
+        }
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Webhook reply cancelled".to_string(),
+        )
+            .into_response(),
+    }
 }
 
 #[cfg(test)]

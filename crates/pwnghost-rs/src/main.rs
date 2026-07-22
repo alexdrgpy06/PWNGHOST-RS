@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use ui::display::Display;
+use ui::web::api::WebhookRequest;
 use ui::web::WebServer;
 
 /// Minimal `sd_notify(3)` client.
@@ -447,6 +448,16 @@ async fn main() -> anyhow::Result<()> {
         let mut state = state_arc.write().await;
         state.config = config.clone();
         state.config_path = args.config.clone();
+    }
+
+    // Webhook channel: bridges web server requests to the agent's main
+    // loop thread, where `PluginManager` lives. Buffer 32 requests to
+    // absorb brief bursts without backpressuring the HTTP handler.
+    let (webhook_tx, mut webhook_rx) =
+        tokio::sync::mpsc::channel::<WebhookRequest>(32);
+    if let Some(ref state_arc) = web_state {
+        let mut state = state_arc.write().await;
+        state.webhook_tx = Some(webhook_tx);
     }
 
     // Create agent
@@ -1185,6 +1196,16 @@ async fn main() -> anyhow::Result<()> {
                 if let Err(e) = recovery_manager.save().await {
                     warn!("Failed to save recovery state: {}", e);
                 }
+            }
+            r = webhook_rx.recv() => {
+                let Some(req) = r else { break; };
+                let (status, response) = agent.plugins.on_webhook(
+                    &req.plugin_name,
+                    &req.path,
+                    &req.method,
+                    &req.body,
+                );
+                let _ = req.reply.send((status, response));
             }
             _ = signal::ctrl_c() => {
                 info!("Shutdown signal received");

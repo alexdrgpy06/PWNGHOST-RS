@@ -516,6 +516,37 @@ impl PluginManager {
         }
     }
 
+    /// Invoke the `on_webhook` hook of a single named plugin.
+    /// Sets `webhook_path`, `webhook_method`, and `webhook_body` Lua globals,
+    /// then reads back `webhook_status` and `webhook_response` after the call.
+    pub fn on_webhook(
+        &self,
+        plugin_name: &str,
+        path: &str,
+        method: &str,
+        body: &str,
+    ) -> (u16, String) {
+        let Some(plugin) = self.plugins.get(plugin_name) else {
+            return (404, format!("Plugin '{}' not found", plugin_name));
+        };
+        let globals = plugin.lua.globals();
+        if let Err(e) = globals
+            .set("webhook_path", path)
+            .and_then(|_| globals.set("webhook_method", method))
+            .and_then(|_| globals.set("webhook_body", body))
+        {
+            return (500, format!("Failed to set webhook globals: {}", e));
+        }
+        if let Err(e) = plugin.execute("on_webhook") {
+            return (500, format!("Plugin {} on_webhook error: {}", plugin_name, e));
+        }
+        let status = globals.get::<u16>("webhook_status").unwrap_or(200);
+        let response = globals
+            .get::<String>("webhook_response")
+            .unwrap_or_else(|_| "OK".to_string());
+        (status, response)
+    }
+
     pub fn list_plugins(&self) -> Vec<String> {
         self.plugins.keys().cloned().collect()
     }
