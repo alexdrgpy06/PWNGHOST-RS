@@ -24,8 +24,6 @@ else
     exit 1
 fi
 
-ZRAM_DEV="/dev/zram$ZRAM_NUM"
-
 echo "Tearing down zram$ZRAM_NUM ($NAME)"
 
 # Sync to disk first

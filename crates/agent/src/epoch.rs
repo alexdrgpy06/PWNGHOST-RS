@@ -157,6 +157,16 @@ impl EpochTracker {
         &self.current
     }
 
+    /// The most recently finalized epoch's real counts (handshakes, deauths,
+    /// associations, APs seen), i.e. the epoch `advance()` just pushed into
+    /// `history`. `current` at this point is the *next* epoch's freshly
+    /// zeroed state, not the one that just ended -- callers that want to
+    /// report on "what just happened" (e.g. the `on_epoch` plugin hook) need
+    /// this, not `current`.
+    pub fn last_completed(&self) -> Option<&EpochState> {
+        self.history.back()
+    }
+
     /// Get mutable current epoch
     pub fn current_mut(&mut self) -> &mut EpochState {
         &mut self.current
@@ -188,6 +198,27 @@ mod tests {
         let tracker = EpochTracker::new();
         assert_eq!(tracker.total_epochs, 0);
         assert_eq!(tracker.current.epoch, 0);
+    }
+
+    #[test]
+    fn test_last_completed_has_finished_epoch_real_data_not_zeroed_current() {
+        let mut tracker = EpochTracker::new();
+        assert!(tracker.last_completed().is_none());
+
+        tracker.current.aps_found = 5;
+        tracker.current.handshakes_this_epoch = 2;
+        tracker.advance(Channel::new(6).unwrap());
+
+        // `current` is now the *next* epoch's freshly zeroed state ...
+        assert_eq!(tracker.current.aps_found, 0);
+        assert_eq!(tracker.current.handshakes_this_epoch, 0);
+        // ... but `last_completed()` still has the real counts from the
+        // epoch that just finished, which is what `on_epoch` plugin hooks
+        // should observe.
+        let finished = tracker.last_completed().unwrap();
+        assert_eq!(finished.epoch, 0);
+        assert_eq!(finished.aps_found, 5);
+        assert_eq!(finished.handshakes_this_epoch, 2);
     }
 
     #[test]

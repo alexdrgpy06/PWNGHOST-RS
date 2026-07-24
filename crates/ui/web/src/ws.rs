@@ -22,6 +22,7 @@ pub enum LiveUpdate {
         channel: u8,
         mood: String,
         face: String,
+        phrase: String,
         level: u32,
         xp: u32,
         peers: usize,
@@ -49,6 +50,7 @@ pub enum LiveUpdate {
     MoodChange {
         mood: String,
         face: String,
+        phrase: String,
     },
     Status {
         cpu_temp: Option<f32>,
@@ -135,6 +137,7 @@ impl WebSocketManager {
         channel: u8,
         mood: String,
         face: String,
+        phrase: String,
         level: u32,
         xp: u32,
         peers: usize,
@@ -147,6 +150,7 @@ impl WebSocketManager {
             channel,
             mood,
             face,
+            phrase,
             level,
             xp,
             peers,
@@ -188,8 +192,8 @@ impl WebSocketManager {
         self.broadcast(LiveUpdate::ChannelChange { channel });
     }
 
-    pub fn broadcast_mood_change(&self, mood: String, face: String) {
-        self.broadcast(LiveUpdate::MoodChange { mood, face });
+    pub fn broadcast_mood_change(&self, mood: String, face: String, phrase: String) {
+        self.broadcast(LiveUpdate::MoodChange { mood, face, phrase });
     }
 
     pub fn broadcast_status(

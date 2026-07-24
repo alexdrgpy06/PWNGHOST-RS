@@ -75,12 +75,13 @@ impl From<config::PersonalityConfig> for PersonalityConfig {
 impl Default for PersonalityConfig {
     fn default() -> Self {
         Self {
-            bored_num_epochs: 50,
-            sad_num_epochs: 100,
+            // Match real pwnagotchi defaults (see config/defaults.toml note).
+            bored_num_epochs: 15,
+            sad_num_epochs: 25,
             angry_num_epochs: 200,
             lonely_num_epochs: 150,
-            bond_encounters_factor: 1.0,
-            max_interactions: 10,
+            bond_encounters_factor: 20000.0,
+            max_interactions: 3,
             throttle: 30,
             reward_handshake: 100,
             reward_new_ap: 10,
@@ -90,8 +91,8 @@ impl Default for PersonalityConfig {
             min_recon_time: 5,
             max_recon_time: 30,
             hop_recon_time: 10,
-            deauth: false,
-            associate: false,
+            deauth: true,
+            associate: true,
             min_rssi: -80,
             position_x: 0,
             position_y: 34,
@@ -129,6 +130,10 @@ impl Personality {
 
     pub fn config(&self) -> &PersonalityConfig {
         &self.config
+    }
+
+    pub fn config_mut(&mut self) -> &mut PersonalityConfig {
+        &mut self.config
     }
 
     /// Restore previously persisted progress (xp/level/handshake+pmkid
@@ -255,7 +260,23 @@ impl Personality {
         }
 
         match epoch.mode {
-            AgentMode::Recon => Mood::LookR,
+            // Real pwnagotchi's view.py alternates LOOK_R/LOOK_L (its
+            // `wait()` step toggle) while idle/exploring rather than
+            // freezing on one -- this previously always returned a fixed
+            // `Mood::LookR` for every Recon epoch, so the face never
+            // varied for as long as the agent stayed in Recon (the common
+            // case: no handshakes yet, blind_epochs below the Bored
+            // threshold, no peers). Confirmed on real hardware: face
+            // stuck on "( ⚆_⚆)" the entire session despite 14 real APs
+            // and active channel-hopping. Alternate by epoch parity so
+            // consecutive epochs actually differ.
+            AgentMode::Recon => {
+                if epoch.epoch.is_multiple_of(2) {
+                    Mood::LookR
+                } else {
+                    Mood::LookL
+                }
+            }
             AgentMode::Attack => Mood::Intense,
             AgentMode::Hop => Mood::LookL,
             AgentMode::Sleep => Mood::Sleep,
@@ -286,30 +307,6 @@ impl Personality {
         base - elapsed
     }
 
-    /// Get motivational phrase for mood
-    pub fn get_phrase(&self, mood: Mood) -> String {
-        match mood {
-            Mood::Happy => "Got one! ✨".to_string(),
-            Mood::Excited => "On a roll! 🚀".to_string(),
-            Mood::Grateful => "Thanks, friend! 🤝".to_string(),
-            Mood::Motivated => "Let's go! 💪".to_string(),
-            Mood::Bored => "Nothing happening... 😴".to_string(),
-            Mood::Lonely => "Anyone there? 👻".to_string(),
-            Mood::Sad => "So quiet... 😢".to_string(),
-            Mood::Angry => "This is frustrating! 😤".to_string(),
-            Mood::Intense => "ATTACKING! ⚡".to_string(),
-            Mood::Cool => "Deauthing like a boss 😎".to_string(),
-            Mood::Sleep => "Zzz... 💤".to_string(),
-            Mood::Awake => "Good morning! ☀️".to_string(),
-            Mood::LookR | Mood::LookL => "Scanning... 👀".to_string(),
-            Mood::LookRHappy | Mood::LookLHappy => "Looking good! ✨".to_string(),
-            Mood::Friend => "Hey buddy! 👋".to_string(),
-            Mood::Broken => "Oops! 💥".to_string(),
-            Mood::Upload => "Uploading... 📤".to_string(),
-            Mood::Smart => "Thinking... 🤔".to_string(),
-            Mood::Demotivated => "Why bother... 😔".to_string(),
-        }
-    }
 
     /// Stats for display
     pub fn stats(&self) -> PersonalityStats {
@@ -383,10 +380,16 @@ mod tests {
     #[test]
     fn test_mood_computation() {
         let p = Personality::default();
-        let epoch = EpochState::new(1, Channel::new(1).unwrap());
 
-        // No APs, no peers -> LookR (Recon)
-        assert_eq!(p.compute_mood(&epoch, &[]), Mood::LookR);
+        // No APs, no peers, Recon mode -> alternates LookR/LookL by epoch
+        // parity (matching real pwnagotchi's look-around idle animation,
+        // rather than freezing on a single fixed face for the whole
+        // session).
+        let even_epoch = EpochState::new(0, Channel::new(1).unwrap());
+        assert_eq!(p.compute_mood(&even_epoch, &[]), Mood::LookR);
+
+        let odd_epoch = EpochState::new(1, Channel::new(1).unwrap());
+        assert_eq!(p.compute_mood(&odd_epoch, &[]), Mood::LookL);
     }
 
     #[test]
@@ -402,19 +405,19 @@ mod tests {
 
     #[test]
     fn test_blind_cascade_lonely_is_reachable() {
-        // AC5 regression: with defaults bored=50 < sad=100 < lonely=150 <
-        // angry=200, each band must be reachable. The old worst-first order
-        // checked sad before lonely, so Lonely never fired.
+        // AC5 regression: with pwnagotchi-matching defaults bored=15 < sad=25 <
+        // lonely=150 < angry=200, each band must be reachable. The old
+        // worst-first order checked sad before lonely, so Lonely never fired.
         let p = Personality::default();
         let mut epoch = EpochState::new(1, Channel::new(1).unwrap());
 
-        epoch.blind_epochs = 60;
+        epoch.blind_epochs = 18; // [15, 25) -> Bored
         assert_eq!(p.compute_mood(&epoch, &[]), Mood::Bored);
-        epoch.blind_epochs = 120;
+        epoch.blind_epochs = 60; // [25, 150) -> Sad
         assert_eq!(p.compute_mood(&epoch, &[]), Mood::Sad);
-        epoch.blind_epochs = 160;
+        epoch.blind_epochs = 160; // [150, 200) -> Lonely
         assert_eq!(p.compute_mood(&epoch, &[]), Mood::Lonely);
-        epoch.blind_epochs = 220;
+        epoch.blind_epochs = 220; // [200, inf) -> Angry
         assert_eq!(p.compute_mood(&epoch, &[]), Mood::Angry);
     }
 
@@ -451,8 +454,14 @@ mod tests {
 
     #[test]
     fn test_phrase_selection() {
-        let p = Personality::default();
-        assert!(p.get_phrase(Mood::Happy).contains("Got one"));
-        assert!(p.get_phrase(Mood::Sleep).contains("Zzz"));
+        // Phrase pools now live on `Mood` itself (`voice_lines`/
+        // `voice_line`), ported from real pwnagotchi's `voice.py`, and are
+        // shared with the face-table precedent (`Mood::face_variants`) --
+        // `Personality::get_phrase` (a fixed, non-upstream, emoji-decorated
+        // 1:1 table) was removed.
+        assert!(Mood::Sleep.voice_lines().contains(&"Zzz"));
+        for _ in 0..20 {
+            assert!(Mood::Happy.voice_lines().contains(&Mood::Happy.voice_line()));
+        }
     }
 }

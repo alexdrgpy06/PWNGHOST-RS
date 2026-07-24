@@ -30,6 +30,7 @@ EOF
 sleep 2
 
 # Find the bnep interface
+# shellcheck disable=SC2034  # $i is just a retry counter, unused by design
 for i in {1..10}; do
     BNEP=$(ip link show | grep -i "bnep" | head -1 | awk -F': ' '{print $2}')
     if [[ -n "$BNEP" ]]; then

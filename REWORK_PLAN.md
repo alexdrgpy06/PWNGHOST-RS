@@ -446,6 +446,512 @@ defaults.toml/default_plugins() fix (small, contained). Impact: Low-Medium
 every fresh install). **Status: done, 2026-07-20**, pending on-device
 verification of the exact gpiomon/gpioget flags.
 
+## Workstream G — Comprehensive real-hardware validation audit (2026-07-21)
+
+Triggered by a real-hardware session that found and fixed a chain of live bugs
+on a flashed Pi Zero 2W (wifi capturing zero real frames despite monitor mode
+"succeeding," XP/level never moving despite real APs being found, the face
+frozen on one expression, the WebUI's live-activity feed permanently stuck on
+its placeholder). Once the wifi capture bug (see below) was fixed and real
+data started flowing end-to-end for the first time, a full comparison audit
+against jayofelony/pwnagotchi source was run across every subsystem to find
+what else silently doesn't work now that real inputs actually exist.
+
+### The root bug that unblocked everything else
+`tools/rebase-jayofelony/overlay/usr/bin/monstart` used `iw dev wlan0 set
+type monitor` (an in-place interface-type change via cfg80211's
+`change_virtual_intf` path) instead of the real jayofelony `pwnlib`'s
+`iw phy <phy> interface add wlan0mon type monitor` (creates a new virtual
+interface via `add_virtual_intf`). On this nexmon-patched FullMAC chip
+(BCM43430/43436), only the interface-add path actually triggers the
+firmware-level monitor/promiscuous setup — the in-place type change just
+relabels the interface at the kernel level with no firmware effect. Result:
+interface existed, monitor mode reported success, channel hopping worked,
+but `root tcpdump -i wlan0mon` showed exactly 0 packets, always, on every
+board, across every earlier "fix" attempt (wifi regdomain, `iw` package,
+etc. — all real but none of them were the actual cause). Fixed by rewriting
+`monstart`/`monstop` to match `pwnlib`'s proven approach. Confirmed on real
+hardware after the fix: 14 real APs, ~20k frames/3min via `wlan_keepalive`,
+real client probe-request logging in bettercap.
+
+### A recurring systemic pattern: implemented, tested, never wired up
+Found **four separate times** across independently-audited subsystems this
+session — worth calling out as a pattern, not four coincidences:
+1. `Agent::add_or_update_ap` (new-AP detection) — existed, unit-tested,
+   marked `#[allow(dead_code)]`, never called. `update_aps` did a blind
+   list-replace instead. Result: `reward_new_ap` XP never fired no matter
+   how many real APs were found. **Fixed.**
+2. `WebSocketManager::broadcast_activity` — fully implemented, never called
+   from anywhere. Result: WebUI's "Live activity" panel permanently showed
+   its placeholder text regardless of real epochs/captures happening.
+   **Fixed** (wired to new-AP-detected and handshake-captured events).
+3. `pwncore::AccessPoint::is_target` (whitelist/blacklist filter) — fully
+   implemented, unit-tested, never called. `Agent::find_target`
+   (`crates/agent/src/lib.rs:306-322`), the sole target-selection function
+   for both the heuristic and RL action-selection paths, filters only by
+   channel/handshake-state/RSSI — never consults `main.whitelist`. **Not yet
+   fixed.** Real security/safety consequence: an SSID/BSSID a user
+   explicitly whitelists (e.g. their own home network) still gets
+   deauthed/associated.
+4. `PersonalityConfig::frame_padding`/`frame_padding_min_bytes` — flows
+   through config into `Personality`, consumed nowhere. The one place it
+   would logically apply (`MeshManager::build_mesh_ie`, this project's own
+   identity-advertisement frame builder) has no padding logic at all.
+
+**Process recommendation:** before calling a feature done, grep for the
+implementing function's call sites outside its own test module. All four
+instances above would have been caught by that one check.
+
+### High severity (real behavioral/security gaps)
+
+- **Whitelist unwired** (above) — `crates/agent/src/lib.rs:306-322`. Fix:
+  call `is_target` in `find_target`.
+- **Mesh/grid is non-functional by architecture, not just "unconfirmed."**
+  Confirmed by call-site inspection: `MeshManager::build_mesh_ie` is never
+  called from anywhere that would transmit it (no TX path into a real
+  beacon/probe), and `update_peer` is never called with real data (no RX
+  path parsing incoming vendor IEs) — `bettercap`'s REST API doesn't expose
+  raw 802.11 management frames at all, only a processed AP/client list.
+  Real pwnagotchi's actual mesh transport lives entirely inside a separate
+  Go `pwngrid-peer` daemon (RSA identity, JWT enrollment, raw frame TX/RX)
+  that this project's own `build.sh` deliberately strips and doesn't
+  reimplement (already the documented Workstream E decision — this confirms
+  the severity is "zero capability," not "partial"). Separately, `grid.lua`'s
+  session-report target `api.opwngrid.com` is likely fabricated outright —
+  real opwngrid is `api.opwngrid.xyz`, and the `/api/v1/report` path matches
+  no real pwngrid-peer endpoint either. No action recommended beyond keeping
+  Workstream E's framing (real interop vs. honest custom mesh vs. drop) —
+  this just sharpens the "why."
+- **`ups_lite.lua` targets the wrong I2C hardware entirely.** Real
+  `ups_lite.py` (marbasec v1.3.0, the actual upstream plugin) talks to a
+  **CW2015** fuel-gauge chip at I2C address **0x62**. This project's plugin
+  targets **MAX17040 at 0x36** — a different chip at a different address.
+  Our own code comment claiming 0x36/MAX17040 is "the original pwnagotchi
+  ups_lite plugin" target is factually wrong. Will never respond on real UPS
+  Lite hardware; permanent "battery read failed" logging is the only
+  possible outcome as shipped.
+- **`pwncrack.lua` implements a different feature under the real plugin's
+  name.** Real `pwncrack.py` uploads pcaps to a remote `pwncrack.org`
+  service and does no local cracking. This project's version does local
+  hashcat dictionary attacks — a real, useful feature, but not what
+  "pwncrack" means upstream; the in-file comment claiming parity is wrong.
+  Not a bug in what it does, but mislabeled — worth a rename or a corrected
+  comment so nobody expects remote-pwncrack.org behavior from it.
+- **`[plugins.pwnstore_ui]` and `[plugins.webgpsmap]` are configurable but
+  entirely unimplemented** — no `.lua` file, no entry in
+  `PluginManager::BUILTINS` (`crates/agent/src/plugins.rs:91-111`). Enabling
+  either from the WebUI's plugin toggle is a silent no-op.
+- **WebUI `auth = true` is a complete no-op.** No middleware, no Basic-auth
+  check exists anywhere in `crates/ui/web/src/{server,api}.rs`. Every route
+  — including the new `/api/reboot` — is open regardless of the config
+  setting. `auth = false` as a *default* correctly matches upstream; the gap
+  is that the *on* setting does nothing, which is worse than an honest
+  missing feature since it looks configured. Related: no CSRF protection on
+  any state-changing route either (real pwnagotchi wraps its whole app in
+  `CSRFProtect`).
+- **`config::schema` fields using bare `#[serde(default)]` silently take the
+  field type's default (false/0), not the struct's custom `Default` impl**
+  (true/34/etc. as appropriate). This is the exact mechanism that produced
+  the already-fixed `deauth=false`/`associate=false` deployed-config bug —
+  but the underlying schema landmine is still live, so it will recur on any
+  future config that omits those keys (a partial hand-edit, a config
+  generated by an older schema version, etc.). Needs an explicit
+  `default = "fn_name"` on every field whose correct default isn't its
+  type's zero-value, not just the two fields already caught by hand.
+- **`personality.min_rssi` default is `-80`; real pwnagotchi's is `-200`**
+  (effectively unfiltered). `-80` silently drops distant/weak real targets
+  from the moment bettercap's `set wifi.rssi.min` is issued.
+- **`main.mon_max_blind_epochs` default is `5`; real is `50`.**
+  `next_epoch`-equivalent logic restarts the whole agent once blind epochs
+  reach this threshold — `5` is 10x more trigger-happy than upstream,
+  meaningful restart-loop risk in an ordinary dead wifi zone.
+- **`personality.max_misses_for_recon` is missing from the schema
+  entirely.** Backs real pwnagotchi's `is_stale()` guard, which no-ops
+  associate/deauth/channel-hop once a target's gone stale. No equivalent
+  exists in this project at all.
+
+### Medium severity
+
+- `personality.bored_num_epochs`/`sad_num_epochs` defaults (`50`/`100`) vs
+  real (`15`/`25`) — much less frequent mood swings than upstream.
+- `personality.max_interactions` default `10` vs real `3` — lingers 3x
+  longer on unproductive targets; also, like `frame_padding` above,
+  `max_interactions`/`throttle` aren't actually consulted by `find_target`
+  either, so the config value doesn't matter yet regardless of default.
+- `personality.angry_num_epochs`/`lonely_num_epochs` are fabricated config
+  surface — real pwnagotchi derives "angry"/"lonely" from a bond-encounter
+  factor and `is_stale()`, not separate epoch-count thresholds.
+- `personality.ap_ttl`/`sta_ttl` missing — real pwnagotchi sends these to
+  bettercap to control seen-AP/station pruning; without them bettercap uses
+  its own internal defaults, which may not match intent.
+- `personality.throttle` (single field) vs real's `throttle_a`/`throttle_d`
+  (separate post-association/post-deauth pause) — collapsed into one field
+  whose consumer wasn't found at all in a schema.rs search; units/intent
+  unclear.
+- `bettercap.silence` (both deployed copies) is missing 6 of the 13 real
+  event names (`ble.device.service.discovered`,
+  `ble.device.characteristic.discovered`, `ble.device.disconnected`,
+  `ble.device.connected`, `ble.connection.timeout`, `wifi.client.probe`) —
+  more journal/log noise, not a capture-rate issue.
+- `Agent::find_target` picks the *first* matching AP, not best-RSSI or
+  least-recently-attacked, and has no cross-epoch backoff — an unproductive
+  target gets retried every single epoch indefinitely. Real `automata.py`
+  tracks per-BSSID interaction history to back off.
+- WebUI plugins page only lists plugins with an explicit `[plugins.x]` config
+  section (via a hardcoded client-side description map), not everything
+  discovered on disk with real metadata/version/upgrade action like
+  upstream's `plugins.html`. Also missing: a shutdown button and a
+  manual/auto operating-mode toggle (both present in real pwnagotchi's UI;
+  no "manual mode" concept exists in this project at all currently).
+- RL reward shaping has 2 terms (handshake +1.0, blind-epoch −0.2) vs real
+  pwnagotchi's 7-term blend (engagement, channel diversity, missed
+  interactions, sustained mood, etc.) — the bandit can't distinguish
+  "productive but risky" from "safe but idle" the way upstream's shaping
+  can. Reasonable given the simpler bandit target (see below), but the
+  shallowest part of the reward design.
+- Real pwnagotchi's RL trains *personality parameters* (recon_time,
+  min_rssi, etc.) which a heuristic layer then executes; this project's RL
+  picks the tactical action (hop/deauth/associate/wait) directly every
+  epoch, collapsing the two-layer design into one. Confirmed **not** a
+  wiring bug — the full path (`select_action_rl` → `AgentAction` → real
+  bettercap calls) is genuinely connected end to end, reward feedback
+  included. A documented architectural simplification, not a defect.
+
+### Low severity / confirmed non-issues (listed so they don't get
+re-investigated)
+
+- Neither project ships a pretrained RL model — both cold-start from zero
+  on first boot. The task brief that assumed otherwise was wrong; verified
+  against real pwnagotchi's own `ai/__init__.py::load()`.
+- The bandit-vs-actor-critic gap (this project has both implemented but
+  only uses the LSTM actor-critic if a checkpoint file exists on disk,
+  otherwise falls back to a simpler bandit) is candidly documented in-code
+  already and is an acceptable, working simplification.
+- `wpa_sec.lua`'s upload format — previously flagged in an old code comment
+  as possibly wrong — **is actually correct**, confirmed byte-for-byte
+  against real `wpa_sec.py` (`files={'file': ...}` + `key=` cookie). The
+  stale comment should be removed; missing pieces are whitelist filtering
+  and internet-availability gating, not the wire format.
+- `ohcapi.lua`'s upload payload shape matches the real V2 API exactly.
+- Structured per-section config forms in the WebUI **exceed** upstream —
+  real pwnagotchi has no built-in web config editor at all (only via a
+  third-party plugin); this project's auto-generated forms are a genuine
+  improvement, not a gap.
+- The cracked-passwords/wpa-sec-potfile WebUI tab also exceeds upstream,
+  which has no core equivalent.
+- `pisugarx.lua`'s charging-bit detection matches real PiSugar3 code
+  exactly; only the battery-percent formula differs (register-read vs
+  upstream's voltage-curve derivation) — plausible per the PiSugar
+  datasheet, not confirmed wrong.
+- Most other plugins (`auto_backup`, `cache`, `fix_services`, `logtail`,
+  `memtemp`, `session_stats`, `webcfg`, `wigle`) are honestly-scoped,
+  simplified-but-functional ports, several with their own in-file comments
+  already disclosing the simplification. Not urgent.
+
+### Suggested priority (highest-impact first)
+1. ~~Wire the whitelist into `find_target`~~ — **done.** Also had to correct
+   `AccessPoint::is_target`'s own exclude-vs-allow-scope direction, which
+   was backwards from real pwnagotchi (caught by a failing regression test
+   that named the intended behavior directly).
+2. ~~Fix the `#[serde(default)]` landmine at the type level~~ — **done**
+   for `deauth`/`associate`/`personality.position_y`/`faces.position_y`;
+   also corrected `faces.png`'s own struct-level default to `false`.
+3. ~~Fix `ups_lite.lua`'s I2C target~~ — **done** (MAX17040@0x36 →
+   CW2015@0x62). Byte-order for the word read is carried over from the
+   pisugarx plugin's pattern, not yet confirmed on real UPS Lite hardware
+   — flagged in-file.
+4. ~~Fix `min_rssi`/`mon_max_blind_epochs` defaults~~ — **done**, all four
+   copies (schema.rs, migrate.rs, defaults.toml, both deployed
+   overlay/pi-gen configs).
+5. Decide and act on `auth=true` being a no-op: either implement real
+   Basic-auth middleware or remove the setting so it stops looking
+   configured when it isn't.
+6. Implement or remove `pwnstore_ui`/`webgpsmap` config sections (silent
+   no-ops currently).
+7. Everything else in High/Medium above, roughly in listed order, as time
+   allows — none of it is currently blocking.
+
+**Also fixed this round, found live on hardware rather than from the
+audit:** a channel-hop absorbing-state bug in `rl-agent`'s bandit
+exploration policy. `ap_histogram` only reflects channels the agent has
+ever visited; the explore branch weighted its random channel pick by that
+histogram with no floor, so once the agent happened to land on one channel
+and see APs only there (nowhere else surveyed yet to compare against),
+every subsequent explore roll landed right back on that same channel —
+forever. Confirmed on real hardware: 15+ consecutive "Hopping to channel 1"
+log lines with zero variation over a 3-minute session. Fixed with a
+uniform exploration floor (`EXPLORE_FLOOR` in `rl-agent/src/policy.rs`) so
+every channel always has some nonzero chance of being sampled regardless of
+prior history.
+
+### Round 2 — deeper audit: voice, filesystem, CLI/mode, systemd units, utilities
+
+A second wave of 5 parallel audits, each starting from the real
+jayofelony/pwnagotchi repo's actual file tree (not guessed paths) to cover
+what Round 1 didn't touch.
+
+**High severity:**
+
+- ~~**No real "voice" (status-text) system exists.**~~ — **done.** Ported
+  real `voice.py`'s phrase pools onto `Mood::voice_lines()`/
+  `Mood::voice_line()` (`crates/pwncore/src/lib.rs`), each a
+  `random`-picked pool per mood matching the real per-mood phrasing
+  (Bored/Sad/Angry/Excited/Grateful/Lonely/Awake/Sleep/Look*/Motivated/
+  Demotivated/Broken). `Agent::current_phrase` re-rolls only on a mood
+  *transition* (mirrors real `automata.py` calling `Voice.on_X()` once per
+  `set_X()` event, not every render tick — confirmed by reading
+  `automata.py` directly), plus a direct celebratory override on handshake
+  capture. Wired into both consumers that used to only have the old fixed
+  `Personality::get_phrase` (now deleted): the e-ink display's status line
+  (`main.rs`'s display-refresh tick) *and* the WebUI, which previously
+  rendered the raw `Mood` enum name — `SessionResponse`/`StatusResponse`/
+  `AppState` gained a `phrase` field, `LiveUpdate::Session`/`MoodChange`
+  now carry it over the websocket, and `index.html` renders it under the
+  face/mood card.
+
+**Medium severity:**
+
+- **No manual/auto mode fork exists** — confirmed a real, deliberate scope
+  gap (not vestigial): real pwnagotchi's `--manual` flag is a complete
+  behavioral fork (`do_manual_mode()` vs `do_auto_mode()` in the real
+  CLI) that disables *all* autonomous recon/hop/deauth/associate, letting
+  a human drive bettercap directly — a genuine safety/consent valve for
+  demos, legal-compliance testing, or CTF use. This project has exactly
+  one code path (always autonomous) and no way to disable offensive
+  behavior short of stopping the whole service. `crates/ui/display/src/
+  layout.rs:345-354` hardcodes the display's mode field to the literal
+  string `"AUTO"` for exactly this reason. Also missing, lower-stakes CLI
+  polish: `--wizard`, `--donate`, `--check-update`, `--clear`,
+  `--print-config`, `-U/--user-config` (all one-shot utility branches in
+  real pwnagotchi, not core-loop behavior).
+- **`remove_whitelisted`-equivalent missing**: real pwnagotchi filters
+  whitelisted SSIDs out of handshake lists before upload/display; no
+  equivalent filtering was found anywhere in this project's capture/
+  upload pipeline. Distinct from the `find_target` whitelist fix already
+  made this session (that gates *targeting*; this would gate what gets
+  *uploaded/shown* for an AP the agent observes passively, e.g. from a
+  neighbor's traffic, without ever attacking it).
+- **`total_unique_handshakes`-equivalent is architecturally different, not
+  just missing**: real pwnagotchi recomputes its handshake count by
+  globbing actual `.pcap` files on disk every time (always ground-truth).
+  This project tracks a persisted in-memory counter
+  (`agent::recovery::RecoveryState.total_handshakes`) that can drift from
+  the real file count if files are deleted/added externally, or if
+  recovery state is corrupted/lost. Worth a disk-rescan fallback or
+  periodic reconciliation if this ever proves to matter in practice.
+- **`iface_channels`-equivalent (query the adapter's actual supported
+  channels) missing**: not found in `crates/radio` or `crates/bettercap`.
+  If channel-hop validity is assumed/hardcoded (13 fixed channels, see
+  `Agent::next_channel`) rather than queried from the real adapter, that
+  could matter on hardware with a different supported channel set (e.g.
+  5GHz-capable chips, or regulatory-restricted channels) — worth a direct
+  check, not yet confirmed as a live bug.
+- **Confirms a Round 1 finding with more detail**: no
+  `on_internet_available`-equivalent gate exists anywhere in this
+  project, and (new this round) it was also not found in real
+  pwnagotchi's own `utils.py`/`agent.py`/`automata.py` directly — it must
+  live elsewhere upstream (not yet located). Corroborates the plugin
+  audit's finding that `wpa_sec.lua`/`ohcapi.lua` fire synchronously on
+  handshake/epoch with no internet-availability gating.
+- **`rsync-zram.timer`'s 60s cadence ignores `FsConfig`'s per-mount `sync`
+  field** (log=60s vs data=3600s in config) — a single shared timer
+  syncs both every 60s regardless, working against the `data` mount's
+  intended lower-wear cadence. A 5th instance of the "config field exists,
+  isn't actually consulted" pattern found this session (after
+  `add_or_update_ap`, `broadcast_activity`, the whitelist, and
+  `frame_padding`).
+- **`pwnghost-rs.service`'s hardening doesn't match its own comment's
+  claim**: the unit's comment says it deliberately mirrors real
+  pwnagotchi's plain, unrestricted-root, `Restart=always` units, but the
+  actual directives keep `NoNewPrivileges=yes`, an explicit
+  `CapabilityBoundingSet=` (5 named caps, vs real pwnagotchi's
+  unrestricted root/all-capabilities), and `Restart=on-failure` (not
+  `always`). Likely intentional hardening from an earlier session, not an
+  oversight, but the comment and the directives now disagree — needs a
+  deliberate decision (keep hardened and fix the comment, or actually
+  match upstream) rather than staying silently inconsistent.
+
+**Low severity / confirmed non-issues:**
+
+- Filesystem/SD-protection (zram-backed logs/data) is a faithful analog
+  of real pwnagotchi's `fs.py` — same protected paths, same size/config
+  intent, and this project's shutdown-flush is *more* robust than
+  upstream's (a systemd `system-shutdown` hook covers external
+  reboot/poweroff/watchdog paths that real pwnagotchi's app-internal
+  `fs.mounts` flush loop would miss entirely).
+- Systemd units for `wlan_keepalive`, `wifi-country`, `bootlog`,
+  `safe-shutdown`, `bt-agent`/`bt-pan@` have no upstream equivalent at
+  all (confirmed via full recursive tree search) — these are intentional
+  custom additions, not parity gaps.
+- `led`/`blink` boot-diagnostic helpers (real `utils.py`) are genuinely
+  absent here — low-medium severity, cheap to port if headless boot
+  diagnostics via the Pi's status LED ever matter.
+- Most of real `utils.py`'s other functions (`DottedTomlEncoder`,
+  `merge_config`, `download_file`, `unzip`, `md5`, `secs_to_hhmmss`,
+  `WifiInfo`/`extract_from_pcap`) are Python-only plumbing or covered by
+  an architecturally-reasonable substitute already (bettercap's own
+  session data instead of re-parsing pcaps directly) — not gaps.
+
+### Round 3 — deep audit: plugin host/runtime, bettercap client handling
+
+Two more parallel, deeper-scoped audits, each specifically targeting one
+subsystem the earlier rounds only surveyed at a shallow level.
+
+**Plugin host/runtime:**
+
+- **Hook surface is much smaller than real pwnagotchi's.** Only three
+  hooks exist here (`on_ready`, `on_epoch`, `on_handshake`) vs. real
+  pwnagotchi's much larger set (`on_loaded`, `on_config_changed`,
+  `on_ui_setup`, `on_ui_update`, `on_wifi_update`, `on_association`,
+  `on_deauthentication`, `on_peer_detected`/`on_peer_lost`,
+  `on_internet_available`, `on_unread_inbox`, every mood-transition hook,
+  `on_bcap_<tag>`). Not fixed this round — a larger scope than the two
+  concrete bugs below, tracked here for a future pass.
+- **Plugin execution is synchronous/blocking**, unlike real pwnagotchi's
+  `PluginEventQueue` (each plugin gets its own thread/queue so one slow or
+  hung plugin can't stall the main loop). Also not fixed this round —
+  architectural, not a quick patch.
+- ~~**`on_epoch` always received a freshly-zeroed `EpochState`, never the
+  epoch that just finished.**~~ — **done.** Root cause:
+  `EpochTracker::advance()` (`crates/agent/src/epoch.rs`) replaces
+  `self.current` with the *next* epoch's zeroed state before returning,
+  and the just-finished epoch's real counts (handshakes, deauths,
+  associations, APs seen) only survive in `self.history.back()`. But
+  `main.rs`'s `on_epoch` call site read `agent.epoch_tracker.current`
+  directly — so every plugin's `on_epoch` hook saw all-zero data, every
+  time, since real pwnagotchi's own `Automata.next_epoch()` has the exact
+  same ordering problem and works around it with `self._epoch.epoch - 1`
+  plus `self._epoch.data()` captured *before* `self._epoch.next()`. Fixed
+  by adding `EpochTracker::last_completed() -> Option<&EpochState>`
+  (returns `history.back()`) and changing the call site to pass
+  `agent.total_epochs().saturating_sub(1)` and `last_completed()` instead
+  — mirrors real pwnagotchi's own `epoch - 1` adjustment for the same
+  underlying reason.
+
+**Bettercap client handling:**
+
+- **No websocket `/api/events` consumption** — bettercap perception is
+  polling-only (`wifi_session()` every 3s in `main.rs`'s
+  `bettercap_poll_interval`). Moderate severity, modest practical impact
+  (3s is fast enough for this project's cadence); not fixed this round.
+- **Asymmetric retry**: only the startup bootstrap sequence retries
+  (10x/2s-flat); every subsequent `run_command` call (channel hop, deauth,
+  associate, the Healer's soft-reset) is fire-once with no retry. Not
+  fixed this round — a deliberate design decision either way, flagged for
+  a future call.
+- ~~**`ureq::Error::Status`'s `Display` doesn't capture the response
+  body**~~ — **done.** bettercap puts its actual failure reason (e.g.
+  "interface not in monitor mode") in the HTTP response body on non-2xx
+  responses; ureq's `Error::Status(code, Response)` variant carries that
+  body but its `Display`/`with_context` path never reads it, so only a
+  generic "unexpected status code" ever reached the logs. Fixed in
+  `crates/bettercap/src/client.rs`'s `run_command`/`wifi_session`: both
+  now match `Err(ureq::Error::Status(code, resp))` explicitly and read
+  `resp.into_string()` into the bailed error message. Also fixed in the
+  same pass: `ApiResponse.message` was missing `#[serde(rename = "msg")]`
+  — bettercap's Go struct (`api_rest_controller.go::APIResponse`) tags
+  that field `json:"msg"`, so without the rename this silently stayed
+  empty on every real response regardless of the body-capture fix above.
+- ~~**`Healer::report_crash()`/`report_alive()` were fully implemented but
+  never called from any real path**~~ — **done** (6th instance of the
+  "config/feature exists, never wired up" pattern this session, after
+  `add_or_update_ap`, `broadcast_activity`, the whitelist, and
+  `frame_padding`/`rsync-zram.timer`'s cadence, both still open below).
+  With nothing ever calling `report_crash`, the crash-window inside
+  `Healer` never had anything in it, so `decide()` could never escalate
+  past `HealingLayer::FwWatchdog` — the entire 6-layer self-healing state
+  machine (soft-reset → GPIO power-cycle → safe mode → USB lifeline) was
+  inert on real hardware no matter how badly bettercap was failing. Wired
+  into `main.rs`'s existing `bettercap_poll_interval` tick (the natural
+  "is the capture engine alive" heartbeat, already polling `wifi_session()`
+  every 3s): `agent.report_alive()` on success, `agent.report_crash()` on
+  either a bettercap-returned error or a panicked/joined blocking task.
+
+### Round 4 — closing gaps that actually block/limit capture success
+
+Direct read of real pwnagotchi's `pwnagotchi/agent.py` (fetched via `gh api
+.../contents/pwnagotchi/agent.py`, not guessed) to check this project's
+core recon/deauth/associate decision loop against the real thing, since
+"the agent captures handshakes reliably" is the actual point of all of the
+above.
+
+- ~~**`find_target` could hand a clientless AP to the deauth branch,
+  wasting that epoch's one deauth slot on a command that can't
+  succeed.**~~ — **done.** Confirmed directly from bettercap's own Go
+  source (`modules/wifi/wifi_deauth.go`'s `startDeauth`): `wifi.deauth
+  <BSSID>` collects every currently-known client of that AP and deauths
+  each one (so passing an AP's own MAC, as this project already did, is
+  correct and even more efficient than real pwnagotchi's own per-station
+  loop) -- but if the AP has *zero* detected clients, that same code path
+  returns a hard error ("doesn't have detected clients") instead of a
+  no-op. `find_target` never checked for that, so it could repeatedly
+  offer a clientless AP as the deauth target while a client-bearing AP
+  later in `self.aps` went untouched. Fixed: `find_target` now takes a
+  `requires_clients: bool` (true for deauth, false for associate --
+  associate needs no client, a PMKID can be pulled from the AP directly),
+  and the heuristic/RL action-selection paths look for deauth and
+  associate targets independently instead of sharing one lookup.
+- ~~**`max_interactions` was fully configurable (schema, migrate,
+  defaults.toml) but never consulted anywhere** — a 7th instance of the
+  "config exists, never wired up" pattern.~~ — **done.** Real
+  pwnagotchi's `Agent._history`/`_should_interact` caps how many times the
+  same BSSID/station can be re-targeted before it's skipped, so one
+  stubborn AP that never yields a handshake (WPA3-only, deauth-resistant
+  client, wrong RSSI reading, etc.) can't monopolize every future
+  deauth/associate slot forever. Added `Agent::interaction_history` (a
+  per-BSSID counter), consulted by `find_target` and incremented in
+  `tick()` whenever a `Deauth`/`Associate` action is actually chosen.
+- ~~**Bettercap bootstrap never applied `wifi.rssi.min`**~~ — **done**
+  (small, matches real pwnagotchi's own `_reset_wifi_settings()`): both
+  the startup bootstrap and the Healer's soft-reset re-bootstrap now `set
+  wifi.rssi.min` to `personality.min_rssi` so bettercap itself stops
+  reporting APs weaker than the configured floor, instead of only
+  filtering them out after the fact in `find_target`.
+- ~~**`BanditPolicy`'s explore branch could only ever produce a
+  `HopChannel` action, never `Deauth`/`Associate`/`Wait`.**~~ — **done,
+  and a genuinely serious finding**: fetched real pwnagotchi's actual
+  gameplay loop (`bin/pwnagotchi`'s `do_auto_mode`, not guessed) to check
+  this project's decision loop against it, and traced `Agent::select_action`
+  through to confirm which policy actually drives it. `agent.rl_agent` is
+  *always* populated (`main.rs` calls `rl_agent::init_agent` unconditionally
+  at startup), and `select_action_rl` is tried before the heuristic
+  fallback -- so on any device without a trained model on disk (i.e. every
+  device, since none ships), `BanditPolicy` is the *sole* decision-maker,
+  not a fallback in name only. Its explore branch (taken with probability
+  `epsilon`, which *starts at 1.0* -- pure exploration) added a nonzero
+  floor to every channel's weight (this session's earlier absorbing-state
+  fix, above) before checking `total > 0.0` to decide whether to hop or
+  fall through to a uniform pick over the whole action space -- but the
+  floor made that check unconditionally true, so it *always* took the
+  "pick a channel to hop to" path and could never fall through to
+  Deauth/Associate/Wait. Net effect: a freshly-flashed device (or any
+  device whose bandit state didn't survive a reboot) would channel-hop
+  forever and never attempt a single deauth or association -- this bug
+  would fully explain poor/zero capture rates independent of every fix
+  already made this session (monitor mode, deauth/associate defaults,
+  whitelist, client-requirement, max_interactions, etc. -- all necessary
+  but insufficient if the policy driving the whole loop never asks for the
+  action in the first place). Fixed: explore now first picks *which kind*
+  of action to try uniformly over the full action space, and only re-rolls
+  with the histogram-weighted channel logic if that pick landed in the
+  "hop" family -- preserving the earlier absorbing-state fix while
+  actually letting Deauth/Associate/Wait be explored (~3/16 of explore
+  rolls, given `action_dim=16`). Regression test added
+  (`test_bandit_explore_can_still_pick_deauth_or_associate`) alongside the
+  existing absorbing-state test to guard both properties simultaneously.
+- **Not done, lower priority / bigger scope**: real pwnagotchi's
+  `ap_ttl`/`sta_ttl` personality settings (`set wifi.ap.ttl`/`wifi.sta.ttl`
+  on bettercap, controlling how long it remembers stale APs/stations) have
+  no equivalent config field or wiring here at all -- bettercap's own stock
+  TTL defaults apply instead. Also confirmed but out of scope for this
+  round: real pwnagotchi's `recon()` sets a *list* of channels (or clears
+  to let bettercap free-hop across everything) and lets bettercap's own
+  internal hop timer drive channel-switching, whereas this project issues
+  one `wifi.recon.channel <N>` command per hop from its own single-channel
+  schedule -- a different but not incorrect architecture (this project's
+  own `Agent::next_channel`/`calc_hop_time` already drives the same
+  end result), not something this round changed.
+
 ## Boundaries
 
 - **Always:** run `cargo test --workspace` before deploying; verify the
@@ -559,3 +1065,95 @@ deprioritized, lightly-touch-only per explicit user direction.
 **Suggested sequence, updated:** Phases 1/2/3/6 done this session. What's
 left -- Phase 4 (plugin host API depth) and Phase 5 (mesh/RL) -- are both
 explicitly lower priority; pick either as time allows, not urgent.
+
+### Phase 7 — Real-hardware validation audit (Workstream G) — 🔶 IN PROGRESS
+First real-hardware session where Phase 1's wifi capture actually worked
+end to end (root cause: `monstart`/`monstop` used the wrong `iw`
+interface-creation path for this nexmon FullMAC chip — fixed) surfaced a
+chain of live bugs only visible once real data started flowing: dead
+new-AP/XP wiring, a frozen mood/face, a dead WebUI activity feed, and
+passive-only `deauth`/`associate` defaults (all **fixed** this session). A
+follow-up comprehensive audit against jayofelony/pwnagotchi source across
+every subsystem (config schema, plugins, WebUI, RL/AI, bettercap/recon
+targeting, mesh/grid) found a longer list — see Workstream G above for full
+detail and file:line citations.
+- **Fixed this session:** `monstart`/`monstop` iw-invocation bug, wifi
+  regdomain verification, `iface` config drift (wlan0→wlan0mon, both
+  deployed copies), `deauth`/`associate` defaults (false→true, both
+  deployed copies), dead `add_or_update_ap`/`update_aps` AP-reward wiring,
+  frozen Recon-mode mood (now alternates LookR/LookL), dead
+  `broadcast_activity` WebUI wiring, plus infra fixes (overclock config,
+  WebUI reboot button, replacement MOTD, GH Actions CI coverage for the
+  rebase-jayofelony pipeline).
+- **Fixed in a follow-up round, same session:** whitelist now wired into
+  `find_target` (also corrected `AccessPoint::is_target`'s own logic, which
+  had the exclude-vs-allow-scope direction backwards from real
+  pwnagotchi -- both fixed together, regression tests on both); the
+  `#[serde(default)]` schema landmine on `deauth`/`associate`/
+  `personality.position_y`/`faces.position_y` (explicit default fns now);
+  `faces.png`'s own struct-level default corrected to `false` to match
+  real pwnagotchi (was the odd one out, not the deployed config);
+  `ups_lite.lua`'s I2C target (MAX17040@0x36 → CW2015@0x62, all four
+  deployed/schema copies); `min_rssi` (-80→-200) and
+  `mon_max_blind_epochs` (5→50) defaults (schema.rs, migrate.rs,
+  defaults.toml, both deployed overlay/pi-gen copies). Also found and
+  fixed live on hardware during this round, not from the audit: a real
+  channel-hop absorbing-state bug in `rl-agent`'s bandit exploration
+  policy -- `ap_histogram` only reflects channels ever visited, so once
+  the agent landed on one channel and found APs only there, every
+  subsequent explore roll landed back on that same channel forever (a
+  self-reinforcing trap, not a preference); fixed with a uniform
+  exploration floor so every channel always has some chance of being
+  sampled.
+- **Round 2 audit (voice, filesystem, CLI/mode, systemd units, general
+  utilities)** found the single biggest remaining gap: there is
+  effectively **no real "voice"/status-text system** at all (one fixed
+  caption per mood, no variety, not even wired to the WebUI) — see
+  Workstream G's "Round 2" subsection for this plus a manual/auto-mode
+  safety-valve gap, a 5th instance of the config-not-wired-up pattern
+  (`rsync-zram.timer`'s cadence), and several lower-severity findings.
+- **Round 3 audit (plugin host/runtime, bettercap client handling)** found
+  two more real bugs (both now fixed — see Workstream G's "Round 3"
+  subsection): `on_epoch` always received a freshly-zeroed `EpochState`
+  instead of the epoch that just finished, and `Healer::report_crash()`/
+  `report_alive()` — a 6th instance of the "implemented, never wired up"
+  pattern — meant the entire 6-layer self-healing state machine was inert
+  on real hardware. Also fixed in the same pass: `ureq::Error::Status`
+  discarding bettercap's actual error-response body from logs, and
+  `ApiResponse.message` missing the `#[serde(rename = "msg")]` needed to
+  actually deserialize bettercap's real field name. Still open from Round
+  3: the smaller plugin hook surface (3 hooks vs. real pwnagotchi's much
+  larger set) and synchronous/blocking plugin execution (both
+  architectural, not quick patches), plus no bettercap websocket event
+  stream and asymmetric command retry (both flagged as deliberate-tradeoff
+  candidates, not urgent).
+- **Fixed this round (voice system + Round 3 bugs):** `Mood::voice_lines()`/
+  `voice_line()` (real `voice.py`-ported phrase pools) and
+  `Agent::current_phrase()` (mood-transition-gated, real handshake-capture
+  override), wired into both the e-ink display and the WebUI
+  (`phrase` field added to `SessionResponse`/`StatusResponse`/`AppState`/
+  `LiveUpdate::Session`/`LiveUpdate::MoodChange`, rendered in
+  `index.html`); `EpochTracker::last_completed()` fixing `on_epoch`'s
+  always-zeroed data; `Healer::report_crash`/`report_alive` wired into
+  `main.rs`'s bettercap poll-interval heartbeat; `bettercap::client`'s
+  `ureq::Error::Status` body-capture and `ApiResponse`'s `msg` rename.
+- **Not yet fixed, highest priority first:** no manual/auto mode fork
+  (Medium, Round 2, real safety/consent gap), WebUI `auth=true` no-op
+  (needs real middleware or removing the setting), `pwnstore_ui`/
+  `webgpsmap` unimplemented-but-configurable plugins, `frame_padding`
+  orphaned config (4th instance of the wiring-bug pattern),
+  `rsync-zram.timer` ignoring per-mount `sync` cadence (5th instance),
+  `pwncrack.lua` mislabeled (implements a different feature than the real
+  plugin of that name), the smaller plugin hook surface and
+  synchronous/blocking plugin execution (Round 3). Full detail in
+  Workstream G.
+- Gate: each fix verified against real hardware where the original bug was
+  found on real hardware, not just unit tests (this entire workstream
+  exists because unit-tested code was still wrong in practice four separate
+  times). Voice system and Round 3 fixes verified so far by
+  `cargo build`/`test`/`clippy --workspace` only — not yet flashed to a
+  real board this round.
+- Not independent of Phase 5 in one place: mesh/grid's audit finding
+  (non-functional by architecture, confirmed by call-site inspection) is
+  now evidence for whichever Phase 5 decision gets made, not a new decision
+  point itself.

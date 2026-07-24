@@ -1,9 +1,16 @@
 #!/bin/bash
-# Return the radio to managed mode (manual/admin use only).
+# Return the radio to managed mode, matching real jayofelony pwnagotchi's
+# /usr/bin/pwnlib::stop_monitor_interface -- reloading brcmfmac is how that
+# real implementation resets this FullMAC chip cleanly after monitor mode,
+# not optional cleanup, so it's kept here rather than the plain interface
+# rename the previous version of this script used.
 set -e
 IFACE="${1:-wlan0}"
 MON="${IFACE}mon"
-ip link set "$MON" down 2>/dev/null || true
-iw dev "$MON" set type managed 2>/dev/null || true
-ip link set "$MON" name "$IFACE" 2>/dev/null || true
-ip link set "$IFACE" up
+ifconfig "$MON" down 2>/dev/null || true
+iw dev "$MON" del 2>/dev/null || true
+modprobe -r brcmfmac 2>/dev/null || true
+sleep 1
+modprobe brcmfmac 2>/dev/null || true
+sleep 2
+ifconfig "$IFACE" up

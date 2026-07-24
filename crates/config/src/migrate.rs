@@ -148,7 +148,10 @@ pub fn migrate_config(legacy: LegacyConfig) -> super::schema::PwnConfig {
         config.main.mon_stop_cmd = m
             .mon_stop_cmd
             .unwrap_or_else(|| "/usr/bin/monstop".to_string());
-        config.main.mon_max_blind_epochs = m.mon_max_blind_epochs.unwrap_or(5);
+        // Real pwnagotchi's own default is 50 -- 5 was 10x more
+        // trigger-happy, real restart-loop risk in an ordinary dead wifi
+        // zone (matches `schema::default_max_blind_epochs`).
+        config.main.mon_max_blind_epochs = m.mon_max_blind_epochs.unwrap_or(50);
         config.main.no_restart = m.no_restart.unwrap_or(false);
         config.main.whitelist = m.whitelist.unwrap_or_default();
         config.main.confd = m
@@ -194,7 +197,9 @@ pub fn migrate_config(legacy: LegacyConfig) -> super::schema::PwnConfig {
         // didn't set it should inherit that, not silently go passive.
         config.personality.deauth = p.deauth.unwrap_or(true);
         config.personality.associate = p.associate.unwrap_or(true);
-        config.personality.min_rssi = -80;
+        // Real pwnagotchi's own default is -200, effectively unfiltered
+        // (matches `schema::default_min_rssi`).
+        config.personality.min_rssi = -200;
         config.personality.position_x = p.position_x.unwrap_or(0);
         config.personality.position_y = p.position_y.unwrap_or(34);
         config.personality.frame_padding = p.frame_padding.unwrap_or(true);

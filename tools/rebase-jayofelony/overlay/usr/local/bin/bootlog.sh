@@ -1,15 +1,17 @@
 #!/bin/bash
 # bootlog.sh - Write a boot diagnostics dump to the boot partition, readable
 # from any PC by pulling the SD card -- no SSH/network/serial console
-# needed. Same script used in the from-scratch pi-gen build
-# (pi-gen/stage5/01-runtime-overlay), copied verbatim into this rebased
-# image's overlay with one difference: the USB gadget check below refers
-# to this base image's own rpi-usb-gadget mechanism, not our
-# usb-gadget-setup.service (which isn't installed here -- see README.md).
+# needed. Adapted from the from-scratch pi-gen build (pi-gen/stage5/
+# 01-runtime-overlay) for two differences: this rebased image is
+# bullseye-layout, so the boot partition mounts at /boot, not
+# /boot/firmware (that convention is bookworm-only); and the USB gadget
+# check below refers to this base image's own rpi-usb-gadget mechanism,
+# not our usb-gadget-setup.service (which isn't installed here -- see
+# README.md).
 
 sleep 3
-if mountpoint -q /boot/firmware; then
-    LOG=/boot/firmware/bootlog.txt
+if mountpoint -q /boot; then
+    LOG=/boot/bootlog.txt
 else
     LOG=/var/log/bootlog.txt
 fi

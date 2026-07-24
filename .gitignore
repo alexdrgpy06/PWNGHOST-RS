@@ -20,3 +20,7 @@ tools/rebase-jayofelony/mnt-boot/
 tools/rebase-jayofelony/mnt-root/
 tools/rebase-jayofelony/base.img
 tools/rebase-jayofelony/.build.lock
+
+# Python bytecode
+__pycache__/
+*.pyc

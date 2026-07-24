@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+RUN pip install --no-cache-dir aiohttp websockets
+
+COPY tools/parity /app/tools/parity
+
+EXPOSE 8081
+
+CMD ["python", "tools/parity/mock_bettercap/server.py", "--scenario", "tools/parity/scenarios/downtown_walk.json", "--port", "8081"]

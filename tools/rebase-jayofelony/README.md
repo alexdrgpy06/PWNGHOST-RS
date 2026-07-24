@@ -1,4 +1,4 @@
-# Rebase pipeline: jayofelony/pwnagotchi v2.9.5.3 + pwnghost-rs
+# Rebase pipeline: jayofelony/pwnagotchi v2.8.9 + pwnghost-rs
 
 An alternate image-build path that starts from a real, currently shipping
 pwnagotchi release image instead of building the OS from scratch via
@@ -16,7 +16,7 @@ rejected after real hardware testing**: it built and passed every static
 check (see below), but on actual Pi Zero W and Pi Zero 2W hardware it
 hung at a black screen with no LED activity at all, several minutes in --
 confirmed with the correctly board-matched image on each board, so it
-wasn't an architecture mismatch. v2.9.5.4 is the *only* jayofelony release
+wasn't an architecture mismatch. v2.9.5.4 is the _only_ jayofelony release
 built on Debian 13 "Trixie" (every other release checked, including this
 one, is Bookworm or older) and the only one packaging nexmon as
 `brcmfmac-nexmon-dkms`/`firmware-nexmon` apt packages rather than a
@@ -25,33 +25,33 @@ which one actually broke boot on these boards isn't isolated, just
 correlated with the Trixie switch.
 
 **A critical correction made mid-session**: earlier passes rejected two
-older candidates --  the archived `jayofelony/pwnagotchi-bullseye` v2.8.4,
+older candidates -- the archived `jayofelony/pwnagotchi-bullseye` v2.8.4,
 and jayofelony/pwnagotchi's own v2.8.9 -- for supposedly lacking real
 nexmon support. That conclusion was based on an incomplete check (firmware
 blob + generic `pwnlib` shell functions, not the actual kernel module
-content). Re-checked properly by decompressing the *active* `brcmfmac.ko`
+content). Re-checked properly by decompressing the _active_ `brcmfmac.ko`
 and searching it directly: **both v2.8.4 and v2.8.9 do have real nexmon**
 (`nexmon_nl_ioctl_handler`, `brcmf_cfg80211_nexmon_set_channel`, build
 path `/usr/local/src/nexmon/patches/driver/brcmfmac_*.y-nexmon/`) --
 nexmon patching appears to be consistently baked into `brcmfmac.ko` across
 every jayofelony release checked, from bullseye through this one. The
-`brcmfmac-nexmon-dkms` package in v2.9.5.4 changed *how* it's packaged
+`brcmfmac-nexmon-dkms` package in v2.9.5.4 changed _how_ it's packaged
 (DKMS rebuild vs. a static pre-patched `.ko`), not whether nexmon is
 present at all -- don't infer "no nexmon" from a missing package name
 alone in any future version check; decompress and grep the actual
 `brcmfmac.ko`.
 
-**This base (`jayofelony/pwnagotchi` v2.9.5.3, Bookworm, 32-bit)** was
-picked as the safer middle ground: Bookworm (not the Trixie base that
+**This base (`jayofelony/pwnagotchi` v2.8.9, Bullseye, 32-bit)** was
+picked as the safer middle ground: Bullseye (not the Trixie base that
 hung on real hardware), and directly confirmed to have real nexmon via
 the kernel-module check above (its `.info` manifest alone doesn't show
 `brcmfmac-nexmon-dkms` since this release predates that packaging, but the
-patched module is baked in directly). USB-gadget/RNDIS *is* pre-configured
+patched module is baked in directly). USB-gadget/RNDIS _is_ pre-configured
 here, the same way it has been since evilsocket's original pwnagotchi:
 `cmdline.txt` has `modules-load=dwc2,g_ether` and `config.txt` has
 `dtoverlay=dwc2` -- confirmed by mounting the actual boot partition
 directly (an earlier pass here wrongly checked `boot/cmdline.txt` inside
-the *root* partition's mount, which is just the empty mountpoint stub, not
+the _root_ partition's mount, which is just the empty mountpoint stub, not
 the real file, and concluded it was missing). This is plain `g_ether`,
 not our own from-scratch build's hand-built configfs RNDIS gadget --
 Windows still needs the manual driver install described in jayofelony's
@@ -76,14 +76,14 @@ undersells how much gets left behind. Directly measured on a mounted copy
 of v2.9.5.4 while writing `build.sh` (v2.9.5.3's layout is identical
 except it has no Rust toolchain to strip):
 
-| Path | Size | What it is |
-|---|---|---|
-| `/root/.rustup` | 1.5 GB | Rust toolchain (v2.9.5.4 only -- v2.9.5.3 doesn't have this) |
-| `/home/pi/bettercap` | 146 MB | bettercap Go source tree, left after `make install` |
-| `/home/pi/.pwn` | 226 MB | pwnagotchi's Python venv |
-| `/usr/local/go` | 251 MB | Go toolchain |
-| `/var/lib/apt/lists` + `/var/cache/apt` | 169 MB | apt cache |
-| `/home/pi/pwngrid` | 29 MB | pwngrid Go source tree |
+| Path                                    | Size   | What it is                                                   |
+| --------------------------------------- | ------ | ------------------------------------------------------------ |
+| `/root/.rustup`                         | 1.5 GB | Rust toolchain (v2.9.5.4 only -- v2.9.5.3 doesn't have this) |
+| `/home/pi/bettercap`                    | 146 MB | bettercap Go source tree, left after `make install`          |
+| `/home/pi/.pwn`                         | 226 MB | pwnagotchi's Python venv                                     |
+| `/usr/local/go`                         | 251 MB | Go toolchain                                                 |
+| `/var/lib/apt/lists` + `/var/cache/apt` | 169 MB | apt cache                                                    |
+| `/home/pi/pwngrid`                      | 29 MB  | pwngrid Go source tree                                       |
 
 That's up to **~2.3 GB removable** (less on v2.9.5.3 without the Rust
 toolchain) -- independent, direct confirmation of what the earlier
@@ -113,7 +113,7 @@ directory), **not** the repo-root `Dockerfile.builder`. `Dockerfile.builder`
 links against bookworm's glibc (~2.36); every base version this pipeline
 supports (v2.8.9 bullseye, glibc 2.31; v2.9.5.3 bookworm, glibc ~2.36 --
 same as builder, but keeping one build path avoids two artifact sets) needs
-a binary linked against the *oldest* glibc among them, since glibc symbol
+a binary linked against the _oldest_ glibc among them, since glibc symbol
 versioning is forward-compatible only. Confirmed the hard way on real
 hardware: a `Dockerfile.builder`-linked binary flashed onto a v2.8.9 image
 fails outright at startup with `version 'GLIBC_2.32' not found`, and
@@ -121,7 +121,7 @@ fails outright at startup with `version 'GLIBC_2.32' not found`, and
 without ever drawing a single frame to the display.
 
 **Resource limits -- read before running.** A real local run of this
-pipeline froze the host machine hard enough to require a reboot, *despite*
+pipeline froze the host machine hard enough to require a reboot, _despite_
 Docker Desktop's WSL2 VM already being capped in `.wslconfig`
 (`memory=10GB`, `swap=4GB`). The VM cap alone doesn't stop a single
 container from filling it and thrashing the VM's swap file, which
@@ -171,7 +171,7 @@ Output: `pwnghost-rs-rebased-pi-zero-w.img.xz` /
   into a half-modified rootfs.
 - `e2fsck -f -y` runs on the root partition after all modifications,
   before shrinking/compressing -- a real filesystem-consistency check on
-  the *build host*, before the image ever touches a real SD card.
+  the _build host_, before the image ever touches a real SD card.
 - The same reliability units the from-scratch build already has are
   carried over verbatim in `overlay/`: zram-backed logging
   (`zram-log.service`/`zram-data.service`/`rsync-zram.timer`), tmpfs for
@@ -217,7 +217,7 @@ asset URL and sha256 (compute it yourself with `sha256sum` if the
 release's API metadata doesn't publish a digest -- several older releases
 don't). Then re-verify nexmon is real for that specific release by
 downloading it, mounting the root partition, and decompressing +
-`strings`-checking the *active* `brcmfmac.ko` for `nexmon_nl_ioctl_handler`
+`strings`-checking the _active_ `brcmfmac.ko` for `nexmon_nl_ioctl_handler`
 -- do **not** rely on the presence/absence of a `brcmfmac-nexmon-dkms`
 package name alone; that packaging changed in v2.9.5.4 but nexmon itself
 appears present (baked into the module directly) in every release checked

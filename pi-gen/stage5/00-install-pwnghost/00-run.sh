@@ -22,10 +22,10 @@ cat > /etc/pwnghost/config.toml << 'CONFIG_EOF'
 [main]
 name = "pwnghost"
 lang = "en"
-iface = "wlan0"
+iface = "wlan0mon"
 mon_start_cmd = "/usr/bin/monstart"
 mon_stop_cmd = "/usr/bin/monstop"
-mon_max_blind_epochs = 5
+mon_max_blind_epochs = 50
 no_restart = false
 whitelist = []
 confd = "/etc/pwnghost/conf.d/"
@@ -56,9 +56,9 @@ penalty_reboot = -50
 min_recon_time = 5
 max_recon_time = 30
 hop_recon_time = 10
-deauth = false
-associate = false
-min_rssi = -80
+deauth = true
+associate = true
+min_rssi = -200
 
 [ui.web]
 enabled = true

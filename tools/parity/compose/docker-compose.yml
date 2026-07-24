@@ -1,0 +1,53 @@
+services:
+  mock_bettercap:
+    build:
+      context: ../../..
+      dockerfile: tools/parity/compose/Dockerfile.mock
+    container_name: mock_bettercap
+    ports:
+      - "8081:8081"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - tmpfs_staging:/var/tmp/pwnghost
+
+  pwnghost:
+    build:
+      context: ../../..
+      dockerfile: tools/parity/compose/Dockerfile.pwnghost
+    container_name: pwnghost_daemon
+    ports:
+      - "8082:8080"
+    environment:
+      - BETTERCAP_HOSTNAME=mock_bettercap
+      - BETTERCAP_PORT=8081
+      - RUST_LOG=info
+    depends_on:
+      - mock_bettercap
+    volumes:
+      - tmpfs_staging:/var/tmp/pwnghost
+      - tmpfs_tmp:/tmp
+
+  jayofelony:
+    build:
+      context: ../../..
+      dockerfile: tools/parity/compose/Dockerfile.jayofelony
+    container_name: jayofelony_pwnagotchi
+    ports:
+      - "8080:8080"
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - mock_bettercap
+    volumes:
+      - tmpfs_staging:/var/tmp/pwnghost
+
+volumes:
+  tmpfs_staging:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+  tmpfs_tmp:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs

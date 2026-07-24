@@ -192,25 +192,12 @@ fn closest_peer_face_and_line(peers: &[pwncore::Peer]) -> Option<(String, String
 /// the real mood face cached from the last epoch tick) because they carry
 /// meaning the scan animation must not paint over.
 fn animated_face(
-    mood: pwncore::Mood,
+    _mood: pwncore::Mood,
     base_face: &'static str,
-    tick: u64,
-    good_mood: bool,
+    _tick: u64,
+    _good_mood: bool,
 ) -> &'static str {
-    use pwncore::Mood;
-    match mood {
-        // Neutral recon/awake states: sweep the gaze left/right each tick.
-        Mood::LookR | Mood::LookL | Mood::Awake => {
-            let look = match (tick.is_multiple_of(2), good_mood) {
-                (true, false) => Mood::LookR,
-                (false, false) => Mood::LookL,
-                (true, true) => Mood::LookRHappy,
-                (false, true) => Mood::LookLHappy,
-            };
-            agent::faces::face_for_mood(look)
-        }
-        _ => base_face,
-    }
+    base_face
 }
 
 fn check_internet() -> bool {
@@ -354,18 +341,25 @@ async fn main() -> anyhow::Result<()> {
         &config.bettercap.username,
         &config.bettercap.password,
     );
+    // Bettercap bootstrap command (idempotent): sets the handshake output
+    // file, disables aggregation, applies the RSSI floor, and -- critically --
+    // turns recon ON. `wifi.rssi.min` mirrors real pwnagotchi's own bettercap
+    // bootstrap (`Agent._reset_wifi_settings`). Hoisted to function scope so
+    // the main poll loop can RE-ASSERT it whenever bettercap (re)connects:
+    // bettercap runs as its own `Restart=always` systemd unit, so if it starts
+    // late or restarts after this initial bootstrap window, recon would
+    // otherwise stay OFF forever and the agent would perceive zero APs for the
+    // rest of its uptime -- a silent "boots but never pwns" failure.
+    let bootstrap_cmd = format!(
+        "set wifi.handshakes.file {}; set wifi.handshakes.aggregate false; set wifi.rssi.min {}; wifi.recon on",
+        staging_dir.display(),
+        config.personality.min_rssi
+    );
+    // Whether the last bettercap interaction succeeded. Seeded from the initial
+    // bootstrap so the poll loop can detect an offline->online transition and
+    // re-run `bootstrap_cmd` (re-enabling recon) exactly once per reconnect.
+    let mut bettercap_reachable;
     {
-        let bc = bc.clone();
-        let staging_dir = staging_dir.clone();
-        // `wifi.rssi.min` mirrors real pwnagotchi's own bettercap bootstrap
-        // (`Agent._reset_wifi_settings`) -- tells bettercap itself not to
-        // bother reporting APs weaker than the configured floor, instead of
-        // only filtering them out after the fact in `Agent::find_target`.
-        let bootstrap_cmd = format!(
-            "set wifi.handshakes.file {}; set wifi.handshakes.aggregate false; set wifi.rssi.min {}; wifi.recon on",
-            staging_dir.display(),
-            config.personality.min_rssi
-        );
         let mut last_err = None;
         for attempt in 1..=10u32 {
             match tokio::task::spawn_blocking({
@@ -385,6 +379,7 @@ async fn main() -> anyhow::Result<()> {
             }
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         }
+        bettercap_reachable = last_err.is_none();
         if let Some(e) = last_err {
             warn!(
                 "bettercap bootstrap failed after 10 attempts, continuing anyway \
@@ -494,13 +489,23 @@ async fn main() -> anyhow::Result<()> {
     match rl_agent::init_agent(&rl_config) {
         Ok(rl) => {
             agent.rl_agent = Some(Arc::new(RwLock::new(rl)));
+            // Only let the RL policy *drive* action selection when a genuinely
+            // trained model is loaded. With no model, `init_agent` falls back
+            // to an epsilon=1.0 (100% random) bandit; letting it drive makes a
+            // freshly-flashed device flail at random and almost never mount a
+            // sustained deauth/associate campaign, unlike real pwnagotchi's
+            // deterministic threshold model. Deterministic heuristic drives by
+            // default; the bandit still learns in the background (rewards fed
+            // via `observe_rl_reward`) so it's ready if a model is later added.
+            agent.rl_drives_actions = using_model;
             info!(
-                "RL agent ready ({})",
+                "RL agent ready ({}, action selection: {})",
                 if using_model {
                     "trained model"
                 } else {
                     "heuristic policy"
-                }
+                },
+                if using_model { "RL-driven" } else { "deterministic heuristic" }
             );
         }
         Err(e) => warn!(
@@ -672,6 +677,24 @@ async fn main() -> anyhow::Result<()> {
                         // anything in it and `decide()` could never
                         // escalate past `FwWatchdog`.
                         agent.report_alive();
+                        // Recon self-heal: if bettercap was unreachable and has
+                        // just come back (late start, or a `Restart=always`
+                        // cycle after our initial bootstrap window), re-run the
+                        // bootstrap so recon is turned back ON. Without this a
+                        // post-bootstrap bettercap restart leaves recon OFF for
+                        // the rest of uptime and the device silently never sees
+                        // an AP again -- a prime "boots but never pwns" cause.
+                        if !bettercap_reachable {
+                            info!("bettercap reachable again -- re-asserting recon bootstrap");
+                            let bc_boot = bc.clone();
+                            let cmd = bootstrap_cmd.clone();
+                            match tokio::task::spawn_blocking(move || bc_boot.run_command(&cmd)).await {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => warn!("recon re-assert failed: {}", e),
+                                Err(je) => warn!("recon re-assert task panicked: {}", je),
+                            }
+                        }
+                        bettercap_reachable = true;
                         let aps = session.to_pwncore();
                         if let Some(ref state_arc) = web_state {
                             state_arc.write().await.aps = aps.clone();
@@ -703,10 +726,14 @@ async fn main() -> anyhow::Result<()> {
                     Ok(Err(e)) => {
                         warn!("bettercap wifi_session poll failed: {}", e);
                         agent.report_crash();
+                        // Mark unreachable so the next successful poll re-runs
+                        // the bootstrap and re-enables recon (see above).
+                        bettercap_reachable = false;
                     }
                     Err(join_err) => {
                         warn!("bettercap wifi_session task panicked: {}", join_err);
                         agent.report_crash();
+                        bettercap_reachable = false;
                     }
                 }
 
@@ -918,6 +945,9 @@ async fn main() -> anyhow::Result<()> {
                     }
                     agent::AgentAction::Deauth(bssid) => {
                         let bssid_for_hook = bssid.clone();
+                        let ssid = agent.ap_ssid(&bssid_for_hook).unwrap_or("").to_string();
+                        let target_name = if !ssid.is_empty() { ssid.clone() } else { bssid_for_hook.clone() };
+                        agent.set_phrase(format!("Deauthenticating {target_name}..."));
                         if manual {
                             info!("[MANUAL] Would deauth {}", bssid);
                         } else {
@@ -933,11 +963,9 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                         // Fire plugin hook so plugins are aware of the intent
-                        // even in manual mode (some may log or display it).
-                        let ssid = agent.ap_ssid(&bssid_for_hook).unwrap_or("");
                         if let Err(e) = agent
                             .plugins
-                            .on_deauthentication(&bssid_for_hook, ssid, "")
+                            .on_deauthentication(&bssid_for_hook, &ssid, "")
                             .await
                         {
                             warn!("Plugin on_deauthentication error: {}", e);
@@ -945,6 +973,9 @@ async fn main() -> anyhow::Result<()> {
                     }
                     agent::AgentAction::Associate(bssid) => {
                         let bssid_for_hook = bssid.clone();
+                        let ssid = agent.ap_ssid(&bssid_for_hook).unwrap_or("").to_string();
+                        let target_name = if !ssid.is_empty() { ssid.clone() } else { bssid_for_hook.clone() };
+                        agent.set_phrase(format!("Associating to {target_name}..."));
                         if manual {
                             info!("[MANUAL] Would associate with {}", bssid);
                         } else {
@@ -960,10 +991,9 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                         // Fire plugin hook.
-                        let ssid = agent.ap_ssid(&bssid_for_hook).unwrap_or("");
                         if let Err(e) = agent
                             .plugins
-                            .on_association(&bssid_for_hook, ssid)
+                            .on_association(&bssid_for_hook, &ssid)
                             .await
                         {
                             warn!("Plugin on_association error: {}", e);
@@ -1052,7 +1082,7 @@ async fn main() -> anyhow::Result<()> {
                         was_online = online;
                     }
 
-                    let uptime = format!("{}s", agent.start.elapsed().as_secs());
+                    let uptime = format_uptime(agent.start.elapsed().as_secs());
                     let stats = agent.personality.stats();
                     let phrase = agent.current_phrase().to_string();
                     let aps_count = agent.aps_count();
@@ -1249,6 +1279,13 @@ async fn main() -> anyhow::Result<()> {
 
     info!("PWNGHOST-RS stopped");
     Ok(())
+}
+
+fn format_uptime(secs: u64) -> String {
+    let hours = secs / 3600;
+    let mins = (secs % 3600) / 60;
+    let s = secs % 60;
+    format!("{:02}:{:02}:{:02}", hours, mins, s)
 }
 
 #[cfg(test)]

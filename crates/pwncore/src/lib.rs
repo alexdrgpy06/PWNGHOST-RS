@@ -112,13 +112,20 @@ impl AccessPoint {
     }
 
     pub fn is_target(&self, whitelist: &[MacAddr], blacklist: &[MacAddr]) -> bool {
-        // Blacklist always wins, even over an explicit whitelist entry.
         if blacklist.contains(&self.bssid) {
             return false;
         }
-        // A non-empty whitelist restricts targets to listed BSSIDs.
-        if !whitelist.is_empty() {
-            return whitelist.contains(&self.bssid);
+        // Real pwnagotchi's `main.whitelist` protects listed SSIDs/BSSIDs
+        // from ever being attacked (its own docs: useful so you don't
+        // deauth your own network, or a neighbor's, constantly) -- an
+        // exclude-list, not a restrict-targeting-to-only-these allow-scope.
+        // A previous version of this function had that backwards ("a
+        // non-empty whitelist restricts targets to listed BSSIDs"), which
+        // -- once actually wired into `Agent::find_target` -- would have
+        // inverted the real safety guarantee: whitelisting your own
+        // network would have made it the *only* thing ever attacked.
+        if whitelist.contains(&self.bssid) {
+            return false;
         }
         true
     }
@@ -288,40 +295,201 @@ pub enum Mood {
 }
 
 impl Mood {
-    /// The canonical kaomoji face for this mood.
+    /// Every candidate kaomoji for this mood, in real jayofelony/pwnagotchi's
+    /// own order.
     ///
     /// **Single source of truth** for faces across the whole workspace --
     /// `agent::faces::face_for_mood` and `ui/display`'s `face_for_mood` both
-    /// delegate here. Values are verified line-for-line against real
-    /// jayofelony/pwnagotchi's `pwnagotchi/ui/faces.py`: exactly one face per
-    /// mood, not randomized. Upstream `view.py` only ever passes a single
-    /// face constant to `set('face', ...)`, so the per-mood "variants" this
-    /// table used to carry were never an upstream behavior (and some
-    /// fabricated alternates even reused a different mood's real face).
-    pub fn face(&self) -> &'static str {
+    /// delegate to [`Mood::face`], which picks randomly from this list.
+    /// Corrected from an earlier version of this table that claimed upstream
+    /// faces were "exactly one per mood, not randomized" -- that was wrong:
+    /// it was checked against `pwnagotchi/ui/faces.py`'s bare Python
+    /// fallback constants, but real pwnagotchi always loads `default.toml`'s
+    /// `[ui.faces]` section on boot (`faces.load_from_config`, and
+    /// `default.toml` is regenerated every restart, so this always applies),
+    /// which overrides every one of those constants with a list, and
+    /// `view.py::_get_random_face` does `random.choice()` whenever it gets a
+    /// list. Verified directly against a real device's `default.toml`, not
+    /// re-derived from faces.py alone this time.
+    pub fn face_variants(&self) -> &'static [&'static str] {
         match self {
-            Mood::LookR => "( ⚆_⚆)",
-            Mood::LookL => "(☉_☉ )",
-            Mood::LookRHappy => "( ◕‿◕)",
-            Mood::LookLHappy => "(◕‿◕ )",
-            Mood::Sleep => "(⇀‿‿↼)",
-            Mood::Awake => "(◕‿‿◕)",
-            Mood::Bored => "(-__-)",
-            Mood::Intense => "(°▃▃°)",
-            Mood::Cool => "(⌐■_■)",
-            Mood::Happy => "(•‿‿•)",
-            Mood::Excited => "(ᵔ◡◡ᵔ)",
-            Mood::Grateful => "(^‿‿^)",
-            Mood::Motivated => "(☼‿‿☼)",
-            Mood::Demotivated => "(≖__≖)",
-            Mood::Smart => "(✜‿‿✜)",
-            Mood::Lonely => "(ب__ب)",
-            Mood::Sad => "(╥☁╥ )",
-            Mood::Angry => "(-_-')",
-            Mood::Friend => "(♥‿‿♥)",
-            Mood::Broken => "(☓‿‿☓)",
-            Mood::Upload => "(1__0)",
+            Mood::LookR => &["( ⚆_⚆)"],
+            Mood::LookL => &["(☉_☉ )"],
+            Mood::LookRHappy => &["( ◕‿◕)", "( ≧◡≦)"],
+            Mood::LookLHappy => &["(◕‿◕ )", "(≧◡≦ )"],
+            Mood::Sleep => &["(⇀‿‿↼)", "(≖‿‿≖)", "(－_－)"],
+            Mood::Awake => &["(◕‿‿◕)"],
+            Mood::Bored => &["(-__-)", "(—__—)"],
+            Mood::Intense => &["(°▃▃°)", "(°ロ°)"],
+            Mood::Cool => &["(⌐■_■)", "(단__단)"],
+            Mood::Happy => &["(•‿‿•)", "(^‿‿^)", "(^◡◡^)"],
+            Mood::Excited => &["(ᵔ◡◡ᵔ)", "(✜‿‿✜)"],
+            Mood::Grateful => &["(^‿‿^)"],
+            Mood::Motivated => &["(☼‿‿☼)", "(★‿★)", "(•̀ᴗ•́)"],
+            Mood::Demotivated => &["(≖__≖)", "(￣ヘ￣)", "(¬､¬)"],
+            Mood::Smart => &["(✜‿‿✜)"],
+            Mood::Lonely => &["(ب__ب)", "(｡•́︿•̀｡)", "(︶︹︺)"],
+            Mood::Sad => &["(╥☁╥ )", "(╥﹏╥)", "(ಥ﹏ಥ)"],
+            Mood::Angry => &["(-_-')", "(⇀__⇀)", "(`___´)"],
+            Mood::Friend => &["(♥‿‿♥)", "(♡‿‿♡)", "(♥‿♥ )", "(♥ω♥ )"],
+            Mood::Broken => &["(☓‿‿☓)"],
+            Mood::Upload => &["(1__0)", "(1__1)", "(0__1)"],
         }
+    }
+
+    /// A random face for this mood, matching real pwnagotchi's own
+    /// `_get_random_face` behavior. See [`Mood::face_variants`] for why this
+    /// is randomized rather than a fixed single string.
+    pub fn face(&self) -> &'static str {
+        use rand::seq::SliceRandom;
+        let variants = self.face_variants();
+        variants
+            .choose(&mut rand::thread_rng())
+            .copied()
+            .unwrap_or(variants[0])
+    }
+
+    /// Every candidate status-line phrase for this mood, ported verbatim
+    /// (English source strings, not the gettext-wrapped originals -- this
+    /// project has no i18n layer) from real jayofelony/pwnagotchi's
+    /// `pwnagotchi/voice.py`. Real pwnagotchi's own `on_bored`/`on_sad`/
+    /// `on_angry`/etc. each return `random.choice()` over a pool like this;
+    /// a previous version of this table (in `Personality::get_phrase`) had
+    /// exactly one fixed, emoji-decorated string per mood with no variety
+    /// and no connection to real pwnagotchi's actual phrasing at all --
+    /// this is the real content, matching `face_variants`' precedent for
+    /// how this project ports real per-mood variety.
+    ///
+    /// Not every real `voice.py` method maps to a `Mood` (several take
+    /// event data -- a peer name, a MAC, a handshake count -- that doesn't
+    /// fit a pure mood lookup); those are wired as standalone event-based
+    /// calls at their real trigger sites instead (see
+    /// `crates/pwnghost-rs/src/main.rs`'s handshake-capture/deauth/associate
+    /// call sites), not here.
+    pub fn voice_lines(&self) -> &'static [&'static str] {
+        match self {
+            Mood::Bored => &["I'm bored ...", "Let's go for a walk!"],
+            Mood::Sad => &[
+                "I'm extremely bored ...",
+                "I'm very sad ...",
+                "I'm sad",
+                "I'm so happy ...",
+                "Life? Don't talk to me about life.",
+                "...",
+            ],
+            Mood::Angry => &["...", "Leave me alone ...", "I'm mad at you!"],
+            Mood::Excited => &[
+                "I'm living the life!",
+                "I pwn therefore I am.",
+                "So many networks!!!",
+                "I'm having so much fun!",
+                "It's a Wi-Fi system! I know this!",
+                "My crime is that of curiosity ...",
+            ],
+            Mood::Grateful => &["Good friends are a blessing!", "I love my friends!"],
+            Mood::Lonely => &[
+                "Nobody wants to play with me ...",
+                "I feel so alone ...",
+                "Let's find friends",
+                "Where's everybody?!",
+            ],
+            // real pwnagotchi's `on_awakening` (waking from sleep)
+            Mood::Awake => &["...", "!", "Hello World!", "I dreamed of electric sheep"],
+            // real pwnagotchi's `on_shutdown`
+            Mood::Sleep => &["Good night.", "Zzz"],
+            // real pwnagotchi's `on_waiting` (the idle look-around loop,
+            // matching this project's Recon-mode LookR/LookL alternation)
+            Mood::LookR | Mood::LookL => &["...", "Looking around ..."],
+            Mood::LookRHappy | Mood::LookLHappy => &["...", "Looking around ..."],
+            // real pwnagotchi's `on_motivated`/`on_demotivated`
+            Mood::Motivated => &[
+                "This is the best day of my life!",
+                "All your base are belong to us",
+                "Fascinating!",
+            ],
+            Mood::Demotivated => &["Shitty day :/"],
+            // real pwnagotchi's `on_rebooting`
+            Mood::Broken => &[
+                "Oops, something went wrong ... Rebooting ...",
+                "Well, this is awkward.",
+                "Tell my packets I love them.",
+                "Have you tried turning it off and on again?",
+                "I'm afraid Dave",
+                "I'm dead, Jim!",
+                "I have a bad feeling about this",
+                "You did this.",
+            ],
+            // No direct real-pwnagotchi mood-level equivalent for these
+            // (real pwnagotchi sets Happy/friend text dynamically per-event
+            // instead -- see `on_handshakes`/`on_new_peer`/`on_assoc` at
+            // their real call sites) -- kept close in spirit rather than
+            // inventing unrelated flavor text.
+            // Lines containing `{name}`/`{ap}`/`{sta}` are templates that
+            // `voice_line_with_context` interpolates at runtime.
+            Mood::Happy => &[
+                "Cool, we got a new handshake!",
+                "Yes! Captured {ap}!",
+                "Got ya {ap}!",
+            ],
+            Mood::Friend => &[
+                "Yo! Sup?",
+                "Hey, how are you doing?",
+                "Hey I know {name}!",
+                "Hello {name}, you're new here!",
+            ],
+            Mood::Intense => &[
+                "Associating ...",
+                "Yo!",
+                "Associating with {ap} ...",
+            ],
+            Mood::Cool => &[
+                "Deauthenticating ...",
+                "No more Wi-Fi for you!",
+                "Deauthing {sta} from {ap}",
+                "Bye bye {sta}!",
+            ],
+            Mood::Smart => &[
+                "Hey, a free channel! Your AP will say thanks.",
+                "This channel is all mine!",
+            ],
+            Mood::Upload => &["Uploading data ...", "Beam me up!"],
+        }
+    }
+
+    /// A random status-line phrase for this mood. See [`Mood::voice_lines`].
+    pub fn voice_line(&self) -> &'static str {
+        use rand::seq::SliceRandom;
+        let variants = self.voice_lines();
+        variants
+            .choose(&mut rand::thread_rng())
+            .copied()
+            .unwrap_or(variants[0])
+    }
+
+    /// Like [`Mood::voice_line`] but substitutes `{name}`, `{ap}`, and
+    /// `{sta}` placeholders with runtime context.  If a placeholder is
+    /// present in the chosen template but no value is provided, it is
+    /// replaced with the empty string.  This mirrors real pwnagotchi's
+    /// voice interpolation system where mood-triggering events carry
+    /// AP/station/peer info into the displayed line.
+    pub fn voice_line_with_context(
+        &self,
+        name: Option<&str>,
+        ap: Option<&str>,
+        sta: Option<&str>,
+    ) -> String {
+        let template = self.voice_line();
+        let mut s = template
+            .replace("{name}", name.unwrap_or(""))
+            .replace("{ap}", ap.unwrap_or(""))
+            .replace("{sta}", sta.unwrap_or(""));
+        // Collapse double spaces left by empty substitutions (e.g.
+        // "Deauthing  from " -> "Deauthing  "), then trim trailing
+        // whitespace so an empty trailing field still reads well.
+        while s.contains("  ") {
+            s = s.replace("  ", " ");
+        }
+        s.trim().to_string()
     }
 }
 
@@ -469,10 +637,23 @@ mod tests {
 
     #[test]
     fn test_mood_face() {
-        // One canonical face per mood, matching upstream faces.py exactly.
-        assert_eq!(Mood::Happy.face(), "(•‿‿•)");
-        assert_eq!(Mood::Angry.face(), "(-_-')");
-        assert_eq!(Mood::Lonely.face(), "(ب__ب)");
+        // face() picks randomly among the mood's real variants (matching
+        // upstream default.toml + view.py's random.choice behavior), so
+        // check membership rather than a single fixed value.
+        for _ in 0..50 {
+            assert!(Mood::Happy.face_variants().contains(&Mood::Happy.face()));
+            assert!(Mood::Angry.face_variants().contains(&Mood::Angry.face()));
+            assert!(Mood::Lonely.face_variants().contains(&Mood::Lonely.face()));
+        }
+    }
+
+    #[test]
+    fn test_mood_face_single_variant_moods_are_stable() {
+        // Moods with exactly one real variant (awake, grateful, smart,
+        // broken, look_r, look_l) should always return that one value.
+        assert_eq!(Mood::Awake.face(), "(◕‿‿◕)");
+        assert_eq!(Mood::Grateful.face(), "(^‿‿^)");
+        assert_eq!(Mood::Broken.face(), "(☓‿‿☓)");
     }
 
     #[test]
@@ -488,13 +669,18 @@ mod tests {
         // No filters = target
         assert!(ap.is_target(&[], &[]));
 
-        // Whitelist match = target
-        assert!(ap.is_target(&["aa:bb:cc:dd:ee:ff".parse().unwrap()], &[]));
+        // Whitelist match = protected, NOT a target (an exclude-list,
+        // matching real pwnagotchi's actual "never attack this" semantic)
+        assert!(!ap.is_target(&["aa:bb:cc:dd:ee:ff".parse().unwrap()], &[]));
+
+        // A whitelist entry for a *different* BSSID doesn't protect this one
+        assert!(ap.is_target(&["11:22:33:44:55:66".parse().unwrap()], &[]));
 
         // Blacklist match = not target
         assert!(!ap.is_target(&[], &["aa:bb:cc:dd:ee:ff".parse().unwrap()]));
 
-        // Blacklist overrides whitelist
+        // Both lists agreeing still excludes (no real conflict now that
+        // whitelist and blacklist both mean "exclude")
         assert!(!ap.is_target(
             &["aa:bb:cc:dd:ee:ff".parse().unwrap()],
             &["aa:bb:cc:dd:ee:ff".parse().unwrap()]

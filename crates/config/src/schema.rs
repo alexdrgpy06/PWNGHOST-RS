@@ -213,6 +213,12 @@ pub struct MainConfig {
 
     #[serde(default)]
     pub log: LogConfig,
+
+    /// Manual mode: disables active attacks (deauth/associate) but keeps
+    /// passive scanning and data sync via USB RNDIS/BT tethering.
+    /// Can be toggled at runtime via Web UI.
+    #[serde(default)]
+    pub manual: bool,
 }
 
 fn default_name() -> String {
@@ -234,7 +240,10 @@ fn default_mon_stop_cmd() -> String {
     "/usr/bin/monstop".to_string()
 }
 fn default_max_blind_epochs() -> u32 {
-    5
+    // Real pwnagotchi's own default is 50 -- this schema's previous
+    // default of 5 was 10x more trigger-happy, real restart-loop risk in
+    // an ordinary dead wifi zone.
+    50
 }
 fn default_confd() -> String {
     "/etc/pwnghost/conf.d/".to_string()
@@ -259,6 +268,7 @@ impl Default for MainConfig {
             custom_plugins: default_custom_plugins(),
             plugins: HashMap::new(),
             log: LogConfig::default(),
+            manual: false,
         }
     }
 }
@@ -398,10 +408,19 @@ pub struct PersonalityConfig {
     pub hop_recon_time: u64,
 
     // Attack settings
-    #[serde(default)]
+    //
+    // These three fields previously used a bare `#[serde(default)]`, which
+    // calls the *field type's* `Default` (false/false/0) when a config
+    // omits the key -- not this struct's own `Default` impl (true/true/34).
+    // That mismatch is exactly what produced a real bug: the deployed
+    // overlay config.toml had `deauth = false`/`associate = false` (caught
+    // and fixed by hand), but the underlying landmine was still live for
+    // any future config that omits these keys entirely. Explicit
+    // `default = "fn"` closes it at the type level instead.
+    #[serde(default = "default_deauth")]
     pub deauth: bool,
 
-    #[serde(default)]
+    #[serde(default = "default_associate")]
     pub associate: bool,
 
     #[serde(default = "default_min_rssi")]
@@ -411,7 +430,7 @@ pub struct PersonalityConfig {
     #[serde(default)]
     pub position_x: i32,
 
-    #[serde(default)]
+    #[serde(default = "default_personality_position_y")]
     pub position_y: i32,
 
     #[serde(default = "default_frame_padding")]
@@ -421,11 +440,12 @@ pub struct PersonalityConfig {
     pub frame_padding_min_bytes: usize,
 }
 
+// Mood thresholds match real pwnagotchi's defaults (see config/defaults.toml).
 fn default_bored_epochs() -> u64 {
-    50
+    15
 }
 fn default_sad_epochs() -> u64 {
-    100
+    25
 }
 fn default_angry_epochs() -> u64 {
     200
@@ -434,10 +454,10 @@ fn default_lonely_epochs() -> u64 {
     150
 }
 fn default_bond_factor() -> f32 {
-    1.0
+    20000.0
 }
 fn default_max_interactions() -> u32 {
-    10
+    3
 }
 fn default_throttle() -> u32 {
     30
@@ -467,7 +487,20 @@ fn default_hop_recon() -> u64 {
     10
 }
 fn default_min_rssi() -> i16 {
-    -80
+    // Real pwnagotchi's own default is -200, effectively unfiltered --
+    // -80 (this schema's previous default) silently drops distant/weak
+    // real targets from the moment bettercap's `set wifi.rssi.min` is
+    // issued.
+    -200
+}
+fn default_deauth() -> bool {
+    true
+}
+fn default_associate() -> bool {
+    true
+}
+fn default_personality_position_y() -> i32 {
+    34
 }
 fn default_frame_padding() -> bool {
     true
@@ -712,7 +745,11 @@ pub struct FacesConfig {
     #[serde(default)]
     pub position_x: i32,
 
-    #[serde(default)]
+    // A bare `#[serde(default)]` here would silently give 0 (the type's
+    // zero-value) for any config that omits this key, not this struct's
+    // actual intended default of 34 -- the same landmine class already
+    // caught once in `PersonalityConfig`.
+    #[serde(default = "default_faces_position_y")]
     pub position_y: i32,
 
     #[serde(skip)]
@@ -722,7 +759,11 @@ pub struct FacesConfig {
 impl Default for FacesConfig {
     fn default() -> Self {
         Self {
-            png: true,
+            // Real pwnagotchi's own default is `false` -- a previous
+            // version of this struct had `true`, diverging from upstream
+            // (the deployed overlay config.toml already correctly used
+            // `false`, so only this in-crate default was the odd one out).
+            png: false,
             position_x: 0,
             // Matches real pwnagotchi's `ui.faces.position_y` default
             // (pwnagotchi/ui/view.py: face position comes directly from
@@ -735,6 +776,10 @@ impl Default for FacesConfig {
             face_paths: HashMap::new(),
         }
     }
+}
+
+fn default_faces_position_y() -> i32 {
+    34
 }
 
 /// Bettercap configuration -- connection settings for the real bettercap

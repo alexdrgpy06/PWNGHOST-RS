@@ -216,83 +216,65 @@ impl LayoutEngine {
         face: &str,
         handshakes: u32,
         total_handshakes: u32,
-        level: u32,
-        xp: u32,
+        _level: u32,
+        _xp: u32,
         mode: &str,
         friend: Option<(&str, &str)>,
     ) -> Result<()> {
         let mut fb = FrameBuffer::new(buffer, width, height);
-        let small = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
         let line_style = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
 
-        // Channel / APs / uptime, as separate label+value pairs (real
-        // pwnagotchi's `LabeledValue` widget) instead of one
-        // concatenated string.
-        draw_labeled_value(
+        // Channel / APs / uptime using DejaVu TTF (Bold label, Regular value)
+        draw_labeled_value_ttf(
             &mut fb,
             "CH",
             &format!("{channel:02}"),
-            &small,
             self.config.channel_x,
             self.config.channel_y,
-        )?;
-        draw_labeled_value(
+        );
+        draw_labeled_value_ttf(
             &mut fb,
             "APS",
             &aps_count.to_string(),
-            &small,
             self.config.aps_x,
             self.config.aps_y,
-        )?;
-        draw_labeled_value(
+        );
+        draw_labeled_value_ttf(
             &mut fb,
             "UP",
             uptime,
-            &small,
             self.config.uptime_x,
             self.config.uptime_y,
-        )?;
+        );
 
-        // Divider between the top info row and the name/status/face
-        // section -- the horizontal rule is one of the most recognizable
-        // pieces of pwnagotchi's screen; a stack of unbordered text lines
-        // with no section structure reads as "not the real UI" even once
-        // every field shows real data.
+        // Divider between the top info row and the name/status/face section
         draw_horizontal_divider(&mut fb, width, self.config.line1_y, line_style);
 
-        // Name and status share the same y as real pwnagotchi (both
-        // *above* the face's own y) -- status's word-wrap extends
-        // downward from here, which is why it visually ends up reading
-        // as "beside" the face in a real screenshot despite anchoring
-        // higher than the face does.
-        draw_line(
+        // Name and status using DejaVu TTF
+        draw_ttf_line(
             &mut fb,
             &format!("{name}>"),
-            &small,
             self.config.name_x,
             self.config.name_y,
-        )?;
+            9,
+            TtfStyle::Bold,
+        );
         for (i, line) in wrap_status_text(status, self.config.status_max_chars)
             .into_iter()
             .take(2)
             .enumerate()
         {
-            draw_line(
+            draw_ttf_line(
                 &mut fb,
                 &line,
-                &small,
                 self.config.status_x,
                 self.config.status_y + i as i32 * 10,
-            )?;
+                9,
+                TtfStyle::Regular,
+            );
         }
 
         // Face. Real pwnagotchi renders this as DejaVuSansMono-Bold at 35pt
-        // (`fonts.Huge`, see `hw/waveshare2in13_V4.py::layout`), the single
-        // dominant element on the screen. We render the same font at the
-        // same size via `crate::ttf` (fontdue outline rasterization) --
-        // DejaVu covers every symbol our face set uses, so this is
-        // pixel-faithful to the original; any codepoint it lacks falls back
-        // to the Unifont bitmap atlas inside `draw_ttf_line`.
         draw_ttf_line(
             &mut fb,
             face,
@@ -302,10 +284,7 @@ impl LayoutEngine {
             TtfStyle::Bold,
         );
 
-        // Closest mesh friend, if any -- matches real pwnagotchi's
-        // `set_closest_peer`/`friend_face`/`friend_name` fields (the
-        // friend's own mood face, plus signal bars + name + handshake
-        // counts), populated from `agent::MeshManager`.
+        // Closest mesh friend, if any
         if let Some((friend_face, friend_line)) = friend {
             draw_ttf_line(
                 &mut fb,
@@ -315,44 +294,37 @@ impl LayoutEngine {
                 self.config.friend_face_size,
                 TtfStyle::Bold,
             );
-            draw_line(
+            draw_ttf_line(
                 &mut fb,
                 friend_line,
-                &small,
                 self.config.friend_x,
                 self.config.friend_y,
-            )?;
+                9,
+                TtfStyle::Regular,
+            );
         }
 
-        // Divider between the face/friend section and the PWND/mode
-        // section below it.
+        // Divider between face/friend section and PWND/mode section
         draw_horizontal_divider(&mut fb, width, self.config.line2_y, line_style);
 
-        // PWND: current-epoch handshakes (lifetime total), plus
-        // level/XP -- real pwnagotchi doesn't track level/XP itself
-        // (that's this project's own RL-agent progression system), so
-        // it's folded into this row rather than claiming a base-UI field
-        // that doesn't exist upstream.
-        draw_labeled_value(
+        // PWND: handshakes count formatted cleanly with DejaVu TTF
+        draw_labeled_value_ttf(
             &mut fb,
-            "PWND",
-            &format!("{handshakes} ({total_handshakes}) L{level} XP{xp}"),
-            &small,
+            "PWND ",
+            &format!("{handshakes} ({total_handshakes})"),
             self.config.shakes_x,
             self.config.shakes_y,
-        )?;
+        );
 
-        // Operating mode. This project always runs autonomously (no
-        // manual/AI toggle exists), so `mode` is a constant "AUTO" -- a
-        // real, honest value, not a placeholder standing in for an
-        // unimplemented feature.
-        draw_line(
+        // Operating mode
+        draw_ttf_line(
             &mut fb,
             mode,
-            &small,
             self.config.mode_x,
             self.config.mode_y,
-        )?;
+            9,
+            TtfStyle::Bold,
+        );
 
         Ok(())
     }
@@ -452,6 +424,17 @@ fn draw_line(
 /// `FONT_6X10`, whose glyphs are exactly 6px wide, so the value's x
 /// position can be computed directly from the label's length instead of
 /// needing a text-measurement API.
+fn draw_labeled_value_ttf(
+    fb: &mut FrameBuffer<'_>,
+    label: &str,
+    value: &str,
+    x: i32,
+    y: i32,
+) {
+    let label_w = draw_ttf_line(fb, label, x, y, 9, TtfStyle::Bold);
+    draw_ttf_line(fb, value, x + label_w, y, 9, TtfStyle::Regular);
+}
+
 fn draw_labeled_value(
     fb: &mut FrameBuffer<'_>,
     label: &str,

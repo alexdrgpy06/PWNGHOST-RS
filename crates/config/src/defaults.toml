@@ -17,7 +17,7 @@ lang = "en"
 iface = "wlan0mon"
 mon_start_cmd = "/usr/bin/monstart"
 mon_stop_cmd = "/usr/bin/monstop"
-mon_max_blind_epochs = 5
+mon_max_blind_epochs = 50
 no_restart = false
 whitelist = []
 confd = "/etc/pwnghost/conf.d/"
@@ -33,12 +33,17 @@ enabled = true
 size = "10M"
 
 [personality]
-bored_num_epochs = 50
-sad_num_epochs = 100
+# Mood thresholds match real pwnagotchi's defaults.toml (bored_num_epochs=15,
+# sad_num_epochs=25, bond_encounters_factor=20000, max_interactions=3). The
+# previous values (50/100/1.0/10) made the device take 3-4x longer to change
+# mood -- and bond_encounters_factor=1.0 meant a single mesh peer instantly
+# flipped every negative mood to "grateful", skipping bored/sad/lonely entirely.
+bored_num_epochs = 15
+sad_num_epochs = 25
 angry_num_epochs = 200
 lonely_num_epochs = 150
-bond_encounters_factor = 1.0
-max_interactions = 10
+bond_encounters_factor = 20000
+max_interactions = 3
 throttle = 30
 reward_handshake = 100
 reward_new_ap = 10
@@ -55,7 +60,7 @@ hop_recon_time = 10
 # targeted APs (via the bettercap capture backend) to provoke handshakes.
 deauth = true
 associate = true
-min_rssi = -80
+min_rssi = -200
 position_x = 0
 position_y = 34
 frame_padding = true

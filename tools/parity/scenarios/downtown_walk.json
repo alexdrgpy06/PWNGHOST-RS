@@ -1,0 +1,74 @@
+{
+  "name": "downtown_walk",
+  "description": "Simulated walk through a downtown area with 3 APs and intermittent client handshakes.",
+  "duration_seconds": 60,
+  "timeline": [
+    {
+      "time_sec": 0,
+      "event": "ap_discovery",
+      "ap": {
+        "mac": "00:11:22:33:44:55",
+        "hostname": "Cafe_WiFi",
+        "channel": 1,
+        "rssi": -65,
+        "encryption": "WPA2",
+        "vendor": "TP-Link",
+        "clients": [
+          {
+            "mac": "AA:BB:CC:11:22:33",
+            "vendor": "Apple",
+            "bssid": "00:11:22:33:44:55",
+            "rssi": -60
+          }
+        ]
+      }
+    },
+    {
+      "time_sec": 5,
+      "event": "ap_discovery",
+      "ap": {
+        "mac": "66:77:88:99:AA:BB",
+        "hostname": "Corporate_Guest",
+        "channel": 6,
+        "rssi": -78,
+        "encryption": "WPA2",
+        "vendor": "Cisco",
+        "clients": []
+      }
+    },
+    {
+      "time_sec": 12,
+      "event": "handshake_captured",
+      "bssid": "00:11:22:33:44:55",
+      "station": "AA:BB:CC:11:22:33",
+      "filename": "Cafe_WiFi_001122334455.pcap"
+    },
+    {
+      "time_sec": 25,
+      "event": "ap_discovery",
+      "ap": {
+        "mac": "CC:DD:EE:FF:00:11",
+        "hostname": "Mobile_Hotspot",
+        "channel": 11,
+        "rssi": -55,
+        "encryption": "WPA2",
+        "vendor": "Samsung",
+        "clients": [
+          {
+            "mac": "99:88:77:66:55:44",
+            "vendor": "Google",
+            "bssid": "CC:DD:EE:FF:00:11",
+            "rssi": -52
+          }
+        ]
+      }
+    },
+    {
+      "time_sec": 35,
+      "event": "handshake_captured",
+      "bssid": "CC:DD:EE:FF:00:11",
+      "station": "99:88:77:66:55:44",
+      "filename": "Mobile_Hotspot_CCDDEEFF0011.pcap"
+    }
+  ]
+}

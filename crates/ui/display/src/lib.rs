@@ -188,8 +188,10 @@ mod tests {
 
     #[test]
     fn test_face_for_mood() {
-        assert_eq!(face_for_mood(Mood::Happy), "(•‿‿•)");
-        assert_eq!(face_for_mood(Mood::Sleep), "(⇀‿‿↼)");
-        assert_eq!(face_for_mood(Mood::Angry), "(-_-')");
+        // face() picks randomly among a mood's real variants -- check
+        // membership, not a single fixed value.
+        assert!(Mood::Happy.face_variants().contains(&face_for_mood(Mood::Happy)));
+        assert!(Mood::Sleep.face_variants().contains(&face_for_mood(Mood::Sleep)));
+        assert!(Mood::Angry.face_variants().contains(&face_for_mood(Mood::Angry)));
     }
 }

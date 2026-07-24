@@ -1,0 +1,31 @@
+#!/bin/sh
+# Replaces the base jayofelony image's own 01-motd (stock pwnagotchi
+# banner), which references /usr/local/lib/python3.9/dist-packages/
+# pwnagotchi/_version.py (removed by build.sh's strip step) and commands
+# (pwnlog, pwnkill, sudo pwnagotchi --wizard/--version/--donate) that don't
+# exist on this rebased image at all -- confirmed broken and actively
+# misleading on real hardware.
+
+_hostname=$(hostname)
+_ip=$(ip -4 -o addr show usb0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+[ -z "$_ip" ] && _ip="<device-ip>"
+
+if systemctl is-active --quiet pwnghost-rs 2>/dev/null; then
+    _status="running"
+else
+    _status="NOT running"
+fi
+
+echo
+echo "(◕‿‿◕) $_hostname -- PWNGHOST-RS"
+echo
+echo "    pwnghost-rs.service is currently: $_status"
+echo "    Web UI:        http://$_ip:8080"
+echo "    Config:        /etc/pwnghost/config.toml"
+echo "    Plugin config: /etc/pwnghost/conf.d/"
+echo
+echo "    Logs:          journalctl -u pwnghost-rs -f"
+echo "    Status:        sudo systemctl status pwnghost-rs"
+echo "    Restart:       sudo systemctl restart pwnghost-rs"
+echo
+echo "    Source: https://github.com/pwnghost-rs/pwnghost-rs"

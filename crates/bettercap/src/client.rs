@@ -22,7 +22,12 @@ use std::time::Duration;
 struct ApiResponse {
     #[serde(default)]
     success: bool,
-    #[serde(default)]
+    // bettercap's Go struct (`modules/api_rest/api_rest_controller.go::
+    // APIResponse`) tags this field `json:"msg"`, not `message` -- without
+    // the rename, serde silently left this at its `#[serde(default)]`
+    // empty string on every real response, so `run_command`'s failure
+    // messages never actually contained bettercap's reported reason.
+    #[serde(default, rename = "msg")]
     message: String,
 }
 
@@ -53,13 +58,28 @@ impl BettercapClient {
     /// `"set wifi.handshakes.file /path; set wifi.handshakes.aggregate false"`.
     pub fn run_command(&self, cmd: &str) -> Result<()> {
         let url = format!("{}/session", self.base_url);
-        let resp = self
+        let resp = match self
             .agent
             .post(&url)
             .set("Content-Type", "application/json")
             .auth(&self.username, &self.password)
             .send_json(serde_json::json!({ "cmd": cmd }))
-            .with_context(|| format!("POST {url} (cmd={cmd:?})"))?;
+        {
+            Ok(resp) => resp,
+            // `ureq::Error::Status`'s own `Display` never includes the
+            // response body, which is exactly where bettercap puts its
+            // actual error text (e.g. "interface not in monitor mode") --
+            // read it explicitly so real failure reasons reach the logs
+            // instead of a bare "unexpected status code" being all that
+            // survives up through `check_healing`'s warn!()s in main.rs.
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                anyhow::bail!("POST {url} (cmd={cmd:?}) failed: HTTP {code}: {body}");
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("POST {url} (cmd={cmd:?})"));
+            }
+        };
 
         let parsed: ApiResponse = resp
             .into_json()
@@ -75,12 +95,16 @@ impl BettercapClient {
     /// status. Source-grounded shape -- see `crate::session`'s doc comment.
     pub fn wifi_session(&self) -> Result<WifiSession> {
         let url = format!("{}/session/wifi", self.base_url);
-        let resp = self
-            .agent
-            .get(&url)
-            .auth(&self.username, &self.password)
-            .call()
-            .with_context(|| format!("GET {url}"))?;
+        let resp = match self.agent.get(&url).auth(&self.username, &self.password).call() {
+            Ok(resp) => resp,
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                anyhow::bail!("GET {url} failed: HTTP {code}: {body}");
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("GET {url}"));
+            }
+        };
         resp.into_json()
             .context("decoding bettercap wifi session response")
     }

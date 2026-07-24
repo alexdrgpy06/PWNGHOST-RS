@@ -191,23 +191,45 @@ impl Policy for BanditPolicy {
         let mut rng = rand::thread_rng();
 
         if rng.gen::<f32>() < self.epsilon {
-            // Explore: prefer channels with observed AP activity when we
-            // have to guess blind (uniform over histogram-weighted
-            // channels if any signal exists, else fully random), which
-            // keeps early exploration useful rather than purely wasteful.
-            let ap_sum: f32 = features.ap_histogram.sum();
-            if ap_sum > 0.0 {
-                let weights = features.ap_histogram.as_slice().unwrap_or(&[]);
+            // Explore: first pick *which kind* of action to try, uniformly
+            // over the whole action space, matching standard epsilon-greedy
+            // semantics. A previous version of this branch special-cased
+            // channel selection whenever *any* AP had ever been observed
+            // anywhere (`ap_histogram` only grows, never resets) -- which
+            // meant that from the first AP sighting onward, *every* explore
+            // roll for the rest of the device's life produced a HopChannel
+            // action and NEVER Deauth/Associate/Wait. On a fresh device
+            // with no trained model, this bandit's explore path is the
+            // only thing selecting actions early on (epsilon starts at
+            // 1.0), so that bug meant the agent would just channel-hop
+            // forever without ever attempting a single capture -- directly
+            // undermining "getting proper pwning," not just a minor skew.
+            let idx = rng.gen_range(0..self.action_dim);
+            if matches!(RlAction::from_index(idx, self.action_dim), RlAction::HopChannel(_)) {
+                // Explored into the "hop" family: still prefer channels
+                // with observed AP activity when guessing blind, but keep
+                // every channel at a nonzero floor weight so one that's
+                // never been visited (zero weight in `ap_histogram`,
+                // which only reflects channels already visited) can still
+                // be reached -- see the absorbing-state regression test
+                // below for the exact scenario this prevents.
+                const EXPLORE_FLOOR: f32 = 1.0;
+                let weights: Vec<f32> = features
+                    .ap_histogram
+                    .iter()
+                    .map(|w| w + EXPLORE_FLOOR)
+                    .collect();
                 let total: f32 = weights.iter().sum();
                 let mut roll = rng.gen::<f32>() * total;
-                for (idx, w) in weights.iter().enumerate() {
+                for (i, w) in weights.iter().enumerate() {
                     roll -= *w;
                     if roll <= 0.0 {
-                        return RlAction::HopChannel((idx + 1) as u8);
+                        return RlAction::HopChannel((i + 1) as u8);
                     }
                 }
+                return RlAction::HopChannel(1);
             }
-            return RlAction::from_index(rng.gen_range(0..self.action_dim), self.action_dim);
+            return RlAction::from_index(idx, self.action_dim);
         }
 
         // Exploit: pick the highest learned Q-value, breaking ties toward
@@ -304,6 +326,72 @@ mod tests {
         assert!(policy.q_values()[3] > policy.q_values()[7]);
         assert!(policy.q_values()[3] > 0.9);
         assert!(policy.q_values()[7] < -0.9);
+    }
+
+    #[test]
+    fn test_bandit_explore_can_escape_single_channel_histogram() {
+        // Regression test for a real absorbing-state bug found on hardware:
+        // `ap_histogram` reflects only channels the agent has ever visited,
+        // so once it happens to land on one channel and find APs only
+        // there (because nowhere else has been surveyed yet), a purely
+        // histogram-weighted explore roll always lands right back on that
+        // same channel -- forever, since a never-visited channel had
+        // exactly zero weight and thus exactly zero probability. The floor
+        // must guarantee other channels are reachable even from this exact
+        // scenario (all weight on one channel, none anywhere else).
+        let policy = BanditPolicy::new(16);
+        let mut features = crate::features::Features::new();
+        features.ap_histogram[0] = 50.0; // heavy weight on channel 1 only
+
+        let mut saw_other_channel = false;
+        for _ in 0..500 {
+            if let RlAction::HopChannel(ch) = policy.select_action(&features) {
+                if ch != 1 {
+                    saw_other_channel = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            saw_other_channel,
+            "explore never escaped channel 1 despite all other channels having zero \
+             observed AP activity -- the absorbing-state bug is back"
+        );
+    }
+
+    #[test]
+    fn test_bandit_explore_can_still_pick_deauth_or_associate() {
+        // Regression test for a second, more serious bug introduced by the
+        // absorbing-state fix above: giving every channel a nonzero floor
+        // weight meant the explore branch's `total > 0.0` check became
+        // unconditionally true, so it *always* took the "pick a channel"
+        // path and could never fall through to the uniform-over-all-actions
+        // choice that used to be the only way Deauth/Associate/Wait got
+        // explored. With epsilon starting at 1.0 (pure exploration) on a
+        // fresh device with no trained model, that meant the agent would
+        // never attempt a single deauth or association -- just hop forever.
+        let policy = BanditPolicy::new(16);
+        let mut features = crate::features::Features::new();
+        features.ap_histogram[0] = 50.0; // heavy weight on channel 1, as above
+
+        let mut saw_deauth = false;
+        let mut saw_associate = false;
+        for _ in 0..2000 {
+            match policy.select_action(&features) {
+                RlAction::Deauth => saw_deauth = true,
+                RlAction::Associate => saw_associate = true,
+                _ => {}
+            }
+            if saw_deauth && saw_associate {
+                break;
+            }
+        }
+        assert!(
+            saw_deauth && saw_associate,
+            "explore never produced Deauth/Associate even with AP activity present \
+             (saw_deauth={saw_deauth}, saw_associate={saw_associate}) -- the \
+             explore-is-always-a-hop regression is back"
+        );
     }
 
     #[test]

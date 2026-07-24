@@ -104,6 +104,7 @@
   .face { font-size: 3rem; line-height: 1; color: var(--text-strong); text-shadow: 0 0 18px rgba(76,175,80,0.3); }
   .mood { font-size: 1.15rem; font-weight: bold; margin-top: 0.4rem; color: var(--text-strong); }
   .mood-label { color: var(--dim); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; }
+  .phrase { color: var(--dim); font-size: 0.85rem; font-style: italic; margin-top: 0.5rem; max-width: 22rem; text-align: center; }
 
   .grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
@@ -220,6 +221,7 @@
     <div class="brandrow">
       <h1>PWNGHOST<span class="sub">-RS</span> <span class="sub" id="agent-name"></span></h1>
       <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></div>
+      <button class="btn" id="reboot-btn" title="Reboot the device">reboot</button>
     </div>
     <nav class="tabs" id="tabs">
       <button data-tab="dashboard" class="active">Dashboard</button>
@@ -241,6 +243,7 @@
           <div class="face" id="face">—</div>
           <div class="mood" id="mood">—</div>
           <div class="mood-label">current mood</div>
+          <div class="phrase" id="phrase">—</div>
         </section>
       </div>
 
@@ -438,7 +441,7 @@ $('tabs').addEventListener('click', (e) => { if (e.target.dataset.tab) showTab(e
 /* ---------- Dashboard data ---------- */
 let lastPeerCount = null;
 function applySession(d) {
-  set('mood', d.mood); set('face', d.face); set('channel', d.channel);
+  set('mood', d.mood); set('face', d.face); set('phrase', d.phrase); set('channel', d.channel);
   set('aps', d.aps); set('handshakes', d.handshakes); set('level', d.level);
   set('xp', d.xp); set('peers-count', d.peers); set('uptime', fmtDuration(d.uptime)); set('epoch', d.epoch);
   if (typeof d.peers === 'number' && d.peers !== lastPeerCount) { lastPeerCount = d.peers; loadPeers(); }
@@ -748,6 +751,12 @@ $('cfg-save-raw').addEventListener('click', saveConfigRaw);
 $('cfg-revert').addEventListener('click', () => { if (lastConfig) renderConfig(lastConfig); });
 $('plugins-refresh').addEventListener('click', loadPlugins);
 $('cracked-refresh').addEventListener('click', loadCracked);
+$('reboot-btn').addEventListener('click', () => {
+  if (!confirm('Reboot the device now?')) return;
+  fetch('/api/reboot', { method: 'POST' }).catch(() => {});
+  $('reboot-btn').disabled = true;
+  $('reboot-btn').textContent = 'rebooting…';
+});
 
 /* ---------- WebSocket live ---------- */
 let ws = null, reconnectDelay = 1000, fallbackTimer = null;
@@ -766,7 +775,7 @@ function connectWs() {
     let msg; try { msg = JSON.parse(evt.data); } catch (e) { return; }
     switch (msg.type) {
       case 'Session': applySession(msg); break;
-      case 'MoodChange': set('mood', msg.mood); set('face', msg.face); break;
+      case 'MoodChange': set('mood', msg.mood); set('face', msg.face); set('phrase', msg.phrase); break;
       case 'Handshake': addHandshakeRow({ bssid: msg.bssid, ssid: msg.ssid, channel: msg.channel, handshake_type: msg.handshake_type, captured_at: null }, true); break;
       case 'Peer': case 'PeerLost': loadPeers(); break;
       case 'ChannelChange': set('channel', msg.channel); break;

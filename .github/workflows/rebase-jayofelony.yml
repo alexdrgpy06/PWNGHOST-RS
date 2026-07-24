@@ -1,0 +1,173 @@
+name: Rebase-Jayofelony Pipeline
+
+# Coverage for tools/rebase-jayofelony/ -- the pipeline that downloads a real
+# jayofelony/pwnagotchi release image, loop-mounts + chroots into it via
+# qemu-user-static, strips the Python pwnagotchi/bettercap/pwngrid stack, and
+# splices in our own pwnghost-rs binary + config + systemd units. This is a
+# separate pipeline from the from-scratch pi-gen build that release.yml
+# exercises (see tools/rebase-jayofelony/README.md), kept in its own workflow
+# file rather than folded into test.yml (Rust-only) or release.yml (the
+# pi-gen/tag-release pipeline) so both tiers below stay together.
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:
+    inputs:
+      board:
+        description: 'Target board (leave blank to build both)'
+        required: false
+        default: ''
+        type: choice
+        options:
+          - ''
+          - pi-zero-w
+          - pi-zero-2w
+  schedule:
+    # Nightly full board-build smoke test (see the `full-board-build` job
+    # below) -- staggered off the hour to avoid the top-of-hour GitHub
+    # Actions scheduling pileup.
+    - cron: '23 3 * * *'
+
+jobs:
+  lint:
+    name: Shellcheck + Config Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Several scripts under overlay/ ship with no file extension at all
+      # (e.g. usr/bin/monstart, usr/local/bin/bt-pan-connect) -- discover
+      # by shebang instead of a glob/hardcoded list so a future script
+      # added without a `.sh` suffix doesn't silently skip linting.
+      - name: Discover shell scripts
+        id: discover
+        run: |
+          {
+            echo "tools/rebase-jayofelony/build.sh"
+            find tools/rebase-jayofelony/overlay -type f
+          } | sort -u | while IFS= read -r f; do
+            first_line=$(head -n1 "$f" 2>/dev/null || true)
+            if printf '%s' "$first_line" | grep -qE '^#!.*\b(bash|sh)\b'; then
+              echo "$f"
+            fi
+          done > /tmp/shell_scripts.txt
+          echo "Found $(wc -l < /tmp/shell_scripts.txt) shell script(s):"
+          cat /tmp/shell_scripts.txt
+
+      # ubuntu-latest runners ship shellcheck preinstalled; fall back to
+      # apt if that ever drifts rather than hard-failing on a runner-image
+      # change outside our control.
+      - name: Ensure shellcheck is available
+        run: command -v shellcheck || (sudo apt-get update && sudo apt-get install -y shellcheck)
+
+      - name: Shellcheck
+        run: xargs -a /tmp/shell_scripts.txt shellcheck
+
+      - name: Validate config.toml
+        run: |
+          python3 -c "
+          import tomllib
+          path = 'tools/rebase-jayofelony/overlay/etc/pwnghost/config.toml'
+          with open(path, 'rb') as f:
+              tomllib.load(f)
+          print(f'{path}: valid TOML')
+          "
+
+  full-board-build:
+    name: Full Board Build
+    # On-demand / nightly only -- this does the actual multi-stage Docker
+    # image surgery (cross-compile, loop-mount, qemu chroot, shrink) and
+    # takes far longer than the lint job above is meant to, so it never
+    # runs on a plain push/PR.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # build.sh chroots into the downloaded jayofelony image via
+      # qemu-user-static for both armhf (pi-zero-w, and pi-zero-2w on the
+      # 2.8.9 base) and aarch64 (pi-zero-2w on the bullseye64 base) --
+      # same binfmt_misc dependency release.yml documents for its own
+      # pi-gen chroot work.
+      - name: Set up QEMU (binfmt_misc for armhf + aarch64)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm,arm64
+
+      # See release.yml's matching step for the full "why" -- the same
+      # binfmt_misc persistent-registration issue applies here, since
+      # build.sh also chroots into a qemu-emulated foreign rootfs from a
+      # fresh `docker run` (a separate mount namespace from whatever
+      # registered qemu at image-build time).
+      - name: Reset QEMU binfmt registration with persistent (F) flag
+        run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+      # Dockerfile.crosscompile, not the repo-root Dockerfile.builder --
+      # this pipeline needs an older glibc baseline (bullseye) than the
+      # from-scratch build's bookworm base. See Dockerfile.crosscompile's
+      # own header comment for the full reasoning.
+      - name: Build cross-compile image
+        run: |
+          docker build \
+            -t pwnghost-crosscompile-bullseye \
+            -f tools/rebase-jayofelony/Dockerfile.crosscompile .
+
+      - name: Extract cross-compiled artifacts
+        run: |
+          docker create --name extract pwnghost-crosscompile-bullseye
+          docker cp extract:/workspace/artifacts ./tools/rebase-jayofelony/artifacts
+          docker rm extract
+
+      - name: Build rebase-jayofelony surgery image
+        run: docker build -t pwnghost-rebase-jayofelony tools/rebase-jayofelony
+
+      # Both board builds share the surgery image and the base-image
+      # download, but tools/rebase-jayofelony/README.md's "Resource
+      # limits" section found a concurrent local run capable of freezing
+      # the host hard enough to need a reboot. A GitHub-hosted runner's
+      # resource profile differs from that local Docker Desktop/WSL2
+      # setup, but there's no upside to risking it here either -- these
+      # are separate steps in the same job specifically so they run
+      # strictly one at a time, never in parallel.
+      - name: Build image (pi-zero-w, base v2.8.9)
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.board == '' || github.event.inputs.board == 'pi-zero-w' }}
+        run: |
+          docker run --rm --privileged \
+            -e BOARD=pi-zero-w \
+            -e BASE_VERSION=2.8.9 \
+            -v "$(pwd)/tools/rebase-jayofelony:/work" \
+            pwnghost-rebase-jayofelony bash build.sh
+
+      - name: Build image (pi-zero-2w, base bullseye64)
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.board == '' || github.event.inputs.board == 'pi-zero-2w' }}
+        run: |
+          docker run --rm --privileged \
+            -e BOARD=pi-zero-2w \
+            -e BASE_VERSION=bullseye64 \
+            -v "$(pwd)/tools/rebase-jayofelony:/work" \
+            pwnghost-rebase-jayofelony bash build.sh
+
+      - name: Upload pi-zero-w image artifact
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.board == '' || github.event.inputs.board == 'pi-zero-w' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pwnghost-rs-rebased-pi-zero-w-img
+          path: tools/rebase-jayofelony/pwnghost-rs-rebased-pi-zero-w-2.8.9.img.xz
+          retention-days: 30
+
+      - name: Upload pi-zero-2w image artifact
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.board == '' || github.event.inputs.board == 'pi-zero-2w' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pwnghost-rs-rebased-pi-zero-2w-img
+          path: tools/rebase-jayofelony/pwnghost-rs-rebased-pi-zero-2w-bullseye64.img.xz
+          retention-days: 30

@@ -22,7 +22,7 @@ pub use plugins::{AgentRef, LuaPlugin, PeerInfo, PluginApi, PluginManager};
 use chrono::{DateTime, Utc};
 use mac_addr::MacAddr;
 use pwncore::{AccessPoint, Channel, Mood, Peer as CorePeer};
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -70,18 +70,14 @@ pub struct Agent {
     /// wired up" pattern found repeatedly this session.
     interaction_history: HashMap<MacAddr, u32>,
 
-    /// Timestamp of the last deauth command sent, used to enforce
-    /// `personality.throttle` (minimum seconds between deauths to
+    /// Per-BSSID timestamp of the last deauth command sent, used to enforce
+    /// `personality.throttle` per target (minimum seconds between deauths to
     /// prevent Broadcom firmware freeze from rapid-fire injection).
-    /// OG pwnagotchi uses the same throttle mechanism to protect the
-    /// BCM43430/BCM43436 chips from Nexmon injection lockups.
-    /// `Cell` provides interior mutability so the check can live in
-    /// the otherwise-immutable `select_action_heuristic`.
-    last_deauth: Cell<Option<Instant>>,
+    last_deauth_map: RefCell<HashMap<MacAddr, Instant>>,
 
-    /// Timestamp of the last association command sent, same throttle
+    /// Per-BSSID timestamp of the last association command sent, same throttle
     /// protection as deauth.
-    last_assoc: Cell<Option<Instant>>,
+    last_assoc_map: RefCell<HashMap<MacAddr, Instant>>,
 
     // Timing
     pub start: Instant,
@@ -94,6 +90,18 @@ pub struct Agent {
     pub radio_manager: Option<Arc<radio::RadioManager>>,
     pub display: Option<Arc<ui::display::Display>>,
     pub web_server: Option<Arc<ui::web::WebServer>>,
+
+    /// Whether the RL policy is allowed to *drive action selection*. Only set
+    /// true when a genuinely trained model is loaded (or RL is explicitly
+    /// enabled in config). On a freshly-flashed device with no model, the RL
+    /// fallback is an epsilon=1.0 (100% random) bandit -- letting it drive
+    /// meant a new device flailed at random and almost never mounted a
+    /// sustained deauth/associate campaign, unlike real pwnagotchi's
+    /// deterministic threshold model that attacks every viable target each
+    /// recon cycle. Default `false` => deterministic `select_action_heuristic`
+    /// drives, matching the original; RL becomes an opt-in enhancement rather
+    /// than a regression that breaks out-of-the-box pwning.
+    pub rl_drives_actions: bool,
 }
 
 impl Agent {
@@ -110,8 +118,8 @@ impl Agent {
             current_channel: 1,
             whitelist: Vec::new(),
             interaction_history: HashMap::new(),
-            last_deauth: Cell::new(None),
-            last_assoc: Cell::new(None),
+            last_deauth_map: RefCell::new(HashMap::new()),
+            last_assoc_map: RefCell::new(HashMap::new()),
             start: Instant::now(),
             started_at: Utc::now(),
             plugins: PluginManager::new(),
@@ -120,6 +128,7 @@ impl Agent {
             radio_manager: None,
             display: None,
             web_server: None,
+            rl_drives_actions: false,
         }
     }
 
@@ -197,14 +206,23 @@ impl Agent {
             AgentAction::Deauth(bssid) => {
                 if let Ok(mac) = bssid.parse::<MacAddr>() {
                     self.record_interaction(mac);
+                    self.last_deauth_map.borrow_mut().insert(mac, Instant::now());
                 }
-                self.last_deauth.set(Some(Instant::now()));
+                self.epoch_tracker.current.track_deauth();
+                self.epoch_tracker.current.did_deauth = true;
+                let ap_ssid = self.ap_ssid(bssid);
+                self.current_phrase = Mood::Cool.voice_line_with_context(None, ap_ssid, Some(bssid));
             }
             AgentAction::Associate(bssid) => {
                 if let Ok(mac) = bssid.parse::<MacAddr>() {
                     self.record_interaction(mac);
+                    self.last_assoc_map.borrow_mut().insert(mac, Instant::now());
                 }
-                self.last_assoc.set(Some(Instant::now()));
+                self.epoch_tracker.current.track_assoc();
+                self.epoch_tracker.current.did_associate = true;
+                self.personality.update_on_association();
+                let ap_ssid = self.ap_ssid(bssid);
+                self.current_phrase = Mood::Intense.voice_line_with_context(None, ap_ssid, None);
             }
             _ => {}
         }
@@ -301,8 +319,16 @@ impl Agent {
     /// whenever the RL policy's suggestion isn't actionable right now (e.g.
     /// it wants to deauth but the personality has deauth disabled).
     fn select_action(&self) -> AgentAction {
-        if let Some(action) = self.select_action_rl() {
-            return action;
+        // Deterministic-first: only let the RL policy drive when a genuinely
+        // trained model is loaded (`rl_drives_actions`). The no-model fallback
+        // is a 100%-random bandit (see `rl_drives_actions`' doc) which must not
+        // suppress the deterministic attacking heuristic on a fresh device.
+        // The bandit still learns in the background via `observe_rl_reward`, so
+        // its state is ready if/when a model or explicit opt-in enables it.
+        if self.rl_drives_actions {
+            if let Some(action) = self.select_action_rl() {
+                return action;
+            }
         }
         self.select_action_heuristic()
     }
@@ -319,20 +345,17 @@ impl Agent {
         let features = self.build_features();
         let p = self.personality.config();
 
-        let not_deauth_throttled = !Self::is_throttled(&self.last_deauth, p.throttle);
-        let not_assoc_throttled = !Self::is_throttled(&self.last_assoc, p.throttle);
-
         match guard.select_action(&features) {
             rl_agent::RlAction::HopChannel(ch) => Some(AgentAction::Hop(ch.clamp(1, 13))),
-            rl_agent::RlAction::Deauth if p.deauth && not_deauth_throttled => self
+            rl_agent::RlAction::Deauth if p.deauth => self
                 .find_target(true)
                 .map(|t| AgentAction::Deauth(t.bssid.to_string())),
-            rl_agent::RlAction::Associate if p.associate && not_assoc_throttled => self
+            rl_agent::RlAction::Associate if p.associate => self
                 .find_target(false)
                 .map(|t| AgentAction::Associate(t.bssid.to_string())),
             rl_agent::RlAction::Wait => Some(AgentAction::Stay),
             rl_agent::RlAction::Sleep(secs) => Some(AgentAction::Sleep(secs as u64)),
-            // Deauth/Associate requested but disabled or throttled.
+            // Deauth/Associate requested but disabled.
             rl_agent::RlAction::Deauth | rl_agent::RlAction::Associate => None,
         }
     }
@@ -368,84 +391,60 @@ impl Agent {
         features
     }
 
-    /// Check whether a rate-limited action is still on cooldown.
-    /// `last` is the timestamp of the last action (deauth or assoc),
-    /// and `throttle` is the minimum interval from `personality.throttle` (u32 seconds).
-    fn is_throttled(last: &Cell<Option<Instant>>, throttle: u32) -> bool {
-        match last.get() {
+    /// Check whether a rate-limited action for a target BSSID is still on cooldown.
+    fn is_bssid_throttled(bssid: MacAddr, map: &RefCell<HashMap<MacAddr, Instant>>, throttle: u32) -> bool {
+        match map.borrow().get(&bssid) {
             None => false,
             Some(t) => t.elapsed().as_secs() < throttle as u64,
         }
     }
 
-    /// Heuristic action selection based on epoch state, mood, and
-    /// personality. This is the fallback used when no RL model is loaded
-    /// (or the RL policy declines to act), and is exactly the original
-    /// decision logic.
+    /// Heuristic (deterministic) action selection based on epoch state and
+    /// personality. This is the default decision logic on a device with no
+    /// trained RL model, and mirrors real pwnagotchi's threshold model:
+    /// it deauths/associates every viable target on the current channel each
+    /// recon cycle, *independent of the cosmetic mood* (bored/sad/lonely/angry
+    /// change the face and status line, not whether the agent attacks).
     fn select_action_heuristic(&self) -> AgentAction {
         let epoch = &self.epoch_tracker.current;
         let p = self.personality.config();
 
-        // Blind epochs: no APs seen for a couple of epochs, hop to find signal
+        // Blind epochs: no APs seen for a couple of epochs, hop to find signal.
         if epoch.blind_epochs >= 2 {
             return AgentAction::Hop(Self::next_channel(self.current_channel));
         }
 
-        // Happy/excited/grateful: we have activity, check for targets
-        match self.current_mood {
-            Mood::Excited | Mood::Grateful | Mood::Motivated => {
-                // Deauth and associate now look for independently-eligible
-                // targets rather than sharing one `find_target()` call:
-                // a deauth candidate must have a detected client (see
-                // `find_target`'s doc comment), but the AP first in
-                // iteration order might not have one yet while a later,
-                // client-bearing AP does -- sharing one lookup meant a
-                // clientless AP could block both actions for the whole
-                // epoch even though associate never needed a client at all.
-                // Rate-liming: skip deauth if throttle hasn't elapsed since
-                // last one -- prevents Broadcom firmware freeze on Nexmon.
-                if p.deauth
-                    && !epoch.did_deauth
-                    && !Self::is_throttled(&self.last_deauth, p.throttle)
-                {
-                    if let Some(target) = self.find_target(true) {
-                        return AgentAction::Deauth(target.bssid.to_string());
-                    }
-                }
-                if p.associate
-                    && !epoch.did_associate
-                    && !Self::is_throttled(&self.last_assoc, p.throttle)
-                {
+        // `Broken` is the firmware-watchdog escalation state, not just a mood:
+        // back off briefly to let an unstable NIC recover (real pwnagotchi
+        // likewise stops hammering a wedged radio). Every *other* mood still
+        // attacks below.
+        if self.current_mood == Mood::Broken {
+            return AgentAction::Sleep(5);
+        }
 
-                    if let Some(target) = self.find_target(false) {
-                        return AgentAction::Associate(target.bssid.to_string());
-                    }
-                }
-                // Time to hop
-                let hop_time = self.personality.calc_hop_time(epoch) as u32;
-                if hop_time > 0 && epoch.duration().num_seconds() as u32 >= hop_time {
-                    return AgentAction::Hop(Self::next_channel(self.current_channel));
-                }
-                AgentAction::Stay
-            }
-            Mood::Bored | Mood::Sad | Mood::Lonely => {
-                // Low activity: hop sooner to find new targets
-                AgentAction::Hop(Self::next_channel(self.current_channel))
-            }
-            Mood::Angry | Mood::Broken => {
-                // Too many failures: take a short break
-                AgentAction::Sleep(5)
-            }
-            _ => {
-                // Default: recon on current channel
-                let recon_time = self.personality.calc_recon_time(epoch) as u32;
-                if epoch.duration().num_seconds() as u32 >= recon_time {
-                    AgentAction::Hop(Self::next_channel(self.current_channel))
-                } else {
-                    AgentAction::Stay
-                }
+        // Attack-first, regardless of mood. Previously this evaluation lived
+        // only in the `_` arm of a `match self.current_mood`, so a Bored/Sad/
+        // Lonely/Angry device would `Hop`/`Sleep` right past a perfectly good
+        // client-bearing target and never pwn -- a divergence from pwnagotchi,
+        // where mood is cosmetic and recon/deauth/assoc runs every cycle.
+        if p.deauth {
+            if let Some(target) = self.find_target(true) {
+                return AgentAction::Deauth(target.bssid.to_string());
             }
         }
+        if p.associate {
+            if let Some(target) = self.find_target(false) {
+                return AgentAction::Associate(target.bssid.to_string());
+            }
+        }
+
+        // No actionable target on this channel right now: hop when this
+        // epoch's recon window has elapsed, otherwise stay and keep watching.
+        let hop_time = self.personality.calc_hop_time(epoch) as u32;
+        if hop_time > 0 && epoch.duration().num_seconds() as u32 >= hop_time {
+            return AgentAction::Hop(Self::next_channel(self.current_channel));
+        }
+        AgentAction::Stay
     }
 
     /// Find best target AP on current channel. `requires_clients` gates
@@ -462,6 +461,11 @@ impl Agent {
     /// client needed), so callers pass `false` there.
     fn find_target(&self, requires_clients: bool) -> Option<&AccessPoint> {
         let p = self.personality.config();
+        let last_map = if requires_clients {
+            &self.last_deauth_map
+        } else {
+            &self.last_assoc_map
+        };
 
         for ap in &self.aps {
             if ap.channel.value() != self.current_channel {
@@ -480,6 +484,9 @@ impl Agent {
                 continue;
             }
             if !self.interactions_remaining(ap.bssid) {
+                continue;
+            }
+            if Self::is_bssid_throttled(ap.bssid, last_map, p.throttle) {
                 continue;
             }
             return Some(ap);
@@ -561,6 +568,11 @@ impl Agent {
     /// transition (see the `current_phrase` field doc comment).
     pub fn current_phrase(&self) -> &str {
         &self.current_phrase
+    }
+
+    /// Set status-line phrase explicitly (e.g. for attack actions or custom events)
+    pub fn set_phrase(&mut self, phrase: impl Into<String>) {
+        self.current_phrase = phrase.into();
     }
 
     /// Get current face
@@ -664,11 +676,13 @@ impl Agent {
         self.personality.update_on_handshake(bssid.octets());
         self.observe_rl_reward(1.0);
         // Matches real pwnagotchi's `Voice.on_handshakes` -- a captured
-        // handshake gets its own celebratory line immediately, overriding
-        // whatever the current mood's generic phrase would say, rather than
-        // waiting for the next mood transition to (eventually) pick a
-        // Happy/Excited/Grateful line from the generic pool.
-        self.current_phrase = "Cool, we got a new handshake!".to_string();
+        // handshake gets its own celebratory line immediately with AP interpolation.
+        let ssid = self
+            .aps
+            .iter()
+            .find(|a| a.bssid == bssid)
+            .and_then(|a| a.ssid.as_deref());
+        self.current_phrase = Mood::Happy.voice_line_with_context(None, ssid, None);
     }
 
     /// Feed a reward signal to the loaded RL policy for whatever action it
@@ -952,6 +966,66 @@ mod tests {
         assert!(agent.personality.stats().xp > xp_before);
         assert_eq!(agent.personality.stats().handshakes, handshakes_before + 1);
         assert_eq!(agent.personality.encounters_for(&bssid.octets()), 1);
+        assert!(
+            agent.current_phrase().contains("test")
+                || agent.current_phrase().contains("handshake")
+                || agent.current_phrase().contains("Got ya")
+                || agent.current_phrase().contains("Captured")
+        );
+    }
+
+    #[test]
+    fn test_fresh_device_attacks_client_bearing_ap_even_when_bored() {
+        // Regression: a freshly-flashed device (no trained RL model, so
+        // `rl_drives_actions == false`) with a client-bearing AP on its
+        // current channel must DEAUTH it -- even when the cosmetic mood is
+        // Bored. Previously the RL bandit (epsilon=1.0 random) drove action
+        // selection and the heuristic gated attacks behind mood, so a
+        // Bored/Sad/Lonely device would just channel-hop past a perfectly good
+        // target and never pwn. This is the core "no pwning" bug.
+        let mut agent = Agent::default();
+        agent.start();
+        agent.rl_drives_actions = false; // no trained model: deterministic path
+        agent.current_mood = Mood::Bored; // cosmetic mood that used to suppress attacks
+        agent.personality.config_mut().deauth = true;
+
+        let bssid: MacAddr = "aa:bb:cc:dd:ee:ff".parse().unwrap();
+        let mut ap = AccessPoint::new(bssid, 1, -50, pwncore::EncryptionType::Wpa2, "Target".into());
+        let sta_mac: MacAddr = "11:22:33:44:55:66".parse().unwrap();
+        ap.add_client(pwncore::Station::new(sta_mac, "Target".into(), -50, 1));
+        agent.aps = vec![ap];
+        agent.set_channel(1); // on the same channel as the target AP
+
+        let action = agent.select_action_heuristic();
+        assert!(
+            matches!(action, AgentAction::Deauth(ref t) if *t == bssid.to_string()),
+            "a fresh, bored device with a client-bearing target must deauth it, got {action:?}"
+        );
+    }
+
+    #[test]
+    fn test_action_voice_line_interpolation() {
+        let mut agent = Agent::default();
+        let bssid_mac: MacAddr = "11:22:33:44:55:66".parse().unwrap();
+        let ap = AccessPoint::new(bssid_mac, 1, -50, pwncore::EncryptionType::Wpa2, "TargetNetwork".into());
+        agent.aps = vec![ap];
+        agent.personality.config_mut().deauth = true;
+
+        // Force mood to excited so select_action triggers deauth or associate
+        agent.current_mood = Mood::Excited;
+        let (_, action) = agent.tick();
+
+        match action {
+            AgentAction::Deauth(target) => {
+                assert_eq!(target, bssid_mac.to_string());
+                assert!(!agent.current_phrase().is_empty());
+            }
+            AgentAction::Associate(target) => {
+                assert_eq!(target, bssid_mac.to_string());
+                assert!(!agent.current_phrase().is_empty());
+            }
+            _ => {}
+        }
     }
 
     #[test]

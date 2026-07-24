@@ -1,8 +1,28 @@
 #!/bin/bash
-# Put the Wi-Fi radio into monitor mode as wlan0mon (manual/admin use only).
+# Put the Wi-Fi radio into monitor mode as wlan0mon.
+#
+# Real jayofelony pwnagotchi's own /usr/bin/pwnlib::start_monitor_interface
+# does this via `iw phy <phy> interface add wlan0mon type monitor` (creating
+# a NEW virtual monitor interface via cfg80211's add_virtual_intf path), not
+# `iw dev wlan0 set type monitor` (an in-place type change via the different
+# change_virtual_intf path) -- an earlier version of this script used the
+# latter, which silently "succeeds" (interface exists, reports type=monitor,
+# channel hopping via `iw dev wlan0mon set channel N` works fine) but never
+# triggers the nexmon-patched brcmfmac driver's firmware-level monitor/
+# promiscuous setup on this FullMAC chip (BCM43430/43436): confirmed on real
+# hardware, zero real 802.11 frames ever captured (root tcpdump: 0 packets
+# over multiple 8-10s windows with bettercap/wlan0mon fully "active" and
+# channel-hopping) despite stock pwnagotchi working fine on the exact same
+# hardware via pwnlib's real (interface-add) path.
 set -e
 IFACE="${1:-wlan0}"
-ip link set "$IFACE" down
-iw dev "$IFACE" set type monitor
-ip link set "$IFACE" name "${IFACE}mon" 2>/dev/null || true
-ip link set "${IFACE}mon" up
+MON="${IFACE}mon"
+rfkill unblock all
+ifconfig "$IFACE" up
+iw dev "$IFACE" set power_save off
+PHY="$(iw phy | head -1 | cut -d" " -f2)"
+iw phy "$PHY" interface add "$MON" type monitor
+rfkill unblock all
+ifconfig "$IFACE" down
+ifconfig "$MON" up
+iw dev "$MON" set power_save off

@@ -379,8 +379,16 @@ install -m 755 "$ARTIFACTS_DIR/$RUST_TARGET/wlan_keepalive" "$ROOT_MNT/usr/local
 # hardware's FullMAC/nexmon chip; confirmed on real hardware: Frames: 0,
 # high ERs, "NetworkDown"/os error 132 (ERFKILL), across every attempt).
 # hcxtools is still needed (hcxpcapngtool validates bettercap's captures
-# exactly as it did AngryOxide's).
-log "Installing hcxtools"
+# exactly as it did AngryOxide's). iw is needed by our own wifi-country.sh
+# (overlay/usr/local/bin/wifi-country.sh) -- confirmed missing on real
+# hardware: `iw reg set` and raspi-config's own `do_wifi_country` (which
+# also shells out to iw) were both silently failing (masked by `|| true`),
+# leaving the kernel's regulatory domain stuck at the generic/restrictive
+# "00" world default despite the marker file claiming the country was
+# configured -- a real, non-hardware explanation for near-zero real 802.11
+# frames being received even though monitor mode and channel hopping both
+# report success at every other layer.
+log "Installing hcxtools + iw"
 chroot "$ROOT_MNT" /bin/bash -euo pipefail -c "
 export DEBIAN_FRONTEND=noninteractive
 # Raspberry Pi's own mirror (raspbian.raspberrypi.org, the source for the
@@ -392,7 +400,7 @@ export DEBIAN_FRONTEND=noninteractive
 # rather than letting one flaky window fail the entire multi-minute image
 # build.
 for attempt in 1 2 3 4 5; do
-    if apt-get update && apt-get install -y --no-install-recommends curl ca-certificates hcxtools; then
+    if apt-get update && apt-get install -y --no-install-recommends curl ca-certificates hcxtools iw; then
         break
     fi
     if [ \"\$attempt\" = 5 ]; then
@@ -418,6 +426,35 @@ rm -rf /var/lib/apt/lists/*
 # back to plain GPIO use.
 log "Disabling dtoverlay=spi1-3cs (conflicts with e-ink RST on GPIO17)"
 sed -i 's/^dtoverlay=spi1-3cs/#dtoverlay=spi1-3cs/' "$BOOT_MNT/config.txt"
+
+# Modest overclock + matching over_voltage, user-requested. Per-board values
+# since Zero W (BCM2835, single-core ARM1176JZF-S) and Zero 2W (BCM2710A1,
+# quad-core Cortex-A53) have different stock clocks and safe headroom --
+# these are conservative, widely-used community values for each chip, not
+# independently validated against this project's own hardware yet. NOTE:
+# raising over_voltage/arm_freq *increases* peak current draw, which is the
+# opposite direction from mitigating the still-unresolved reboot-loop
+# investigation (see HANDOFF.md) -- only worth doing once power delivery
+# itself is confirmed not to be the cause.
+log "Applying overclock + over_voltage for $BOARD"
+case "$BOARD" in
+    pi-zero-w)
+        cat >> "$BOOT_MNT/config.txt" <<'EOF'
+
+# Modest overclock (Pi Zero W / BCM2835, stock 1000MHz)
+over_voltage=2
+arm_freq=1100
+EOF
+        ;;
+    pi-zero-2w)
+        cat >> "$BOOT_MNT/config.txt" <<'EOF'
+
+# Modest overclock (Pi Zero 2W / BCM2710A1, stock 1000MHz)
+over_voltage=4
+arm_freq=1200
+EOF
+        ;;
+esac
 
 # overlay/ (see this directory) carries our own config.toml,
 # pwnghost-rs.service, wlan_keepalive.service, monstart/monstop, and the
@@ -477,6 +514,10 @@ chmod +x /lib/systemd/system-shutdown/safe-shutdown.sh 2>/dev/null || true
 # does not cover them -- named explicitly, matching the from-scratch pi-gen build
 # stage5/01-runtime-overlay/00-run.sh does for the same two files.
 chmod +x /usr/local/bin/bt-pan-connect /usr/local/bin/bt-pan-disconnect 2>/dev/null || true
+# update-motd.d scripts must be executable for run-parts (invoked by
+# pam_motd) to run them at all -- otherwise the stale base-image MOTD
+# this replaces would silently keep winning.
+chmod +x /etc/update-motd.d/01-motd 2>/dev/null || true
 # The overlay is bind-mounted in from a Windows/NTFS host, whose file
 # modes do not survive the Docker Desktop bind-mount + rsync chain
 # reliably -- confirmed the hard way: systemd warned these two were
@@ -502,6 +543,7 @@ chmod 644 /etc/systemd/system/pwnghost-rs.service \
           /etc/systemd/system/buffer-cleaner.timer \
           /etc/systemd/system/bootlog.service \
           /etc/systemd/system/safe-shutdown.service
+chmod 644 /etc/modprobe.d/g_ether.conf 2>/dev/null || true
 # wifi-country.service (ported from the from-scratch pi-gen build overlay
 # -- see pi-gen/stage5/01-runtime-overlay -- never carried over here
 # originally, see README.md "Not carried over in this first pass" note)
@@ -612,7 +654,8 @@ log "Compressing"
 # from 6 threads to 1 on a host with plenty of free memory, turning a
 # multi-core box into a single-threaded compression run). 80% is
 # generous headroom while still leaving room for the rest of the system.
-xz -T0 -9 -v -f --memlimit-compress=80% "$OUT_IMG"
+xz -T0 -9 -v -f -k --memlimit-compress=80% "$OUT_IMG"
+rm -f "$OUT_IMG" 2>/dev/null || true
 
 log "Done: $OUT_XZ"
 ls -lh "$OUT_XZ"
