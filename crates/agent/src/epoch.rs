@@ -19,6 +19,12 @@ pub struct EpochState {
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
     pub blind_epochs: u64,
+    /// Running count of epochs where APs were visible but the agent failed to
+    /// engage them (no valid target, no capture). pwnagotchi's `num_missed`;
+    /// drives the lonely/angry "recon backoff" in `compute_mood`. Reset to 0 on
+    /// any successful deauth/associate or capture. Distinct from `blind_epochs`
+    /// (no APs at all).
+    pub num_missed: u32,
     pub total_handshakes: u64,
     pub total_epochs: u64,
     pub aps_seen: usize,
@@ -43,6 +49,7 @@ impl EpochState {
             started_at: now,
             ended_at: None,
             blind_epochs: 0,
+            num_missed: 0,
             total_handshakes: 0,
             total_epochs: 0,
             aps_seen: 0,
@@ -135,6 +142,16 @@ impl EpochTracker {
         let was_blind = self.current.aps_found == 0;
         let prev_blind = self.current.blind_epochs;
 
+        // Missed-interaction streak (pwnagotchi's `num_missed`): the epoch we
+        // just finished counts as a "miss" if it saw APs but never engaged them
+        // (no deauth/associate) and captured nothing. A successful interaction
+        // or capture resets the streak; a fully blind epoch (no APs) holds it,
+        // since that case is handled by the separate `blind_epochs` cascade.
+        let attacked = self.current.did_deauth || self.current.did_associate;
+        let captured = self.current.handshakes_this_epoch > 0;
+        let saw_aps = self.current.aps_found > 0;
+        let prev_missed = self.current.num_missed;
+
         self.history.push_back(self.current.clone());
         if self.history.len() > self.max_history {
             self.history.pop_front();
@@ -143,6 +160,13 @@ impl EpochTracker {
 
         let mut next = EpochState::new(self.total_epochs, new_channel);
         next.blind_epochs = if was_blind { prev_blind + 1 } else { 0 };
+        next.num_missed = if attacked || captured {
+            0
+        } else if saw_aps {
+            prev_missed + 1
+        } else {
+            prev_missed
+        };
         next.total_epochs = self.total_epochs;
         self.current = next;
     }

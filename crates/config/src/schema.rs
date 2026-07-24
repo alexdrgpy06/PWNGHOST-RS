@@ -110,7 +110,6 @@ fn default_plugins() -> HashMap<String, PluginConfig> {
         "fix_services",
         "grid",
         "webcfg",
-        "pwnstore_ui",
     ] {
         plugins.insert(
             name.to_string(),
@@ -123,8 +122,8 @@ fn default_plugins() -> HashMap<String, PluginConfig> {
     // Opt-in: either uploads to a third-party service and needs a
     // credential the user hasn't set yet (wpa_sec, wigle, ohcapi), or
     // depends on optional hardware/tooling not every install has
-    // (bt_tether, gpio_buttons, gps, memtemp, pisugarx, ups_lite,
-    // webgpsmap), or is otherwise not something every user wants running
+    // (bt_tether, gpio_buttons, gps, memtemp, pisugarx, ups_lite), or is
+    // otherwise not something every user wants running
     // by default (logtail, pwncrack, session_stats). **Previously this
     // whole function set every plugin to `enabled: true` unconditionally,
     // silently shipping upload plugins active with no credential set and
@@ -144,7 +143,6 @@ fn default_plugins() -> HashMap<String, PluginConfig> {
         "pwncrack",
         "session_stats",
         "ups_lite",
-        "webgpsmap",
         "wigle",
         "wpa_sec",
     ] {
@@ -406,6 +404,10 @@ pub struct PersonalityConfig {
 
     #[serde(default = "default_hop_recon")]
     pub hop_recon_time: u64,
+    /// pwnagotchi's `max_misses_for_recon` (default 5): after this many epochs
+    /// of seeing APs but failing to engage, the agent goes lonely (angry at 2x).
+    #[serde(default = "default_max_misses")]
+    pub max_misses_for_recon: u32,
 
     // Attack settings
     //
@@ -483,6 +485,9 @@ fn default_min_recon() -> u64 {
 fn default_max_recon() -> u64 {
     30
 }
+fn default_max_misses() -> u32 {
+    5
+}
 fn default_hop_recon() -> u64 {
     10
 }
@@ -527,6 +532,7 @@ impl Default for PersonalityConfig {
             min_recon_time: default_min_recon(),
             max_recon_time: default_max_recon(),
             hop_recon_time: default_hop_recon(),
+            max_misses_for_recon: default_max_misses(),
             // Real pwnagotchi's core behavior: actively deauth discovered
             // APs to force handshakes. When enabled, the agent issues
             // deauth/assoc against targeted APs via the bettercap backend.

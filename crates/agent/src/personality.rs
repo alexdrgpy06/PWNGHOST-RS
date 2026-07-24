@@ -30,6 +30,11 @@ pub struct PersonalityConfig {
     pub min_recon_time: u64,
     pub max_recon_time: u64,
     pub hop_recon_time: u64,
+    /// Missed-interaction threshold (pwnagotchi's `max_misses_for_recon`,
+    /// default 5): after this many epochs of seeing APs but failing to engage
+    /// (no valid target / no capture), the agent goes lonely -- and angry at
+    /// 2x. Distinct from `blind_epochs` (no APs at all).
+    pub max_misses_for_recon: u32,
 
     // Attack settings
     pub deauth: bool,
@@ -61,6 +66,7 @@ impl From<config::PersonalityConfig> for PersonalityConfig {
             min_recon_time: c.min_recon_time,
             max_recon_time: c.max_recon_time,
             hop_recon_time: c.hop_recon_time,
+            max_misses_for_recon: c.max_misses_for_recon,
             deauth: c.deauth,
             associate: c.associate,
             min_rssi: c.min_rssi,
@@ -91,6 +97,7 @@ impl Default for PersonalityConfig {
             min_recon_time: 5,
             max_recon_time: 30,
             hop_recon_time: 10,
+            max_misses_for_recon: 5,
             deauth: true,
             associate: true,
             min_rssi: -200, // match pwnagotchi's default (no practical floor)
@@ -209,6 +216,18 @@ impl Personality {
     }
 
     /// Compute mood from epoch state, matching real pwnagotchi's precedence.
+    /// Severity ranking for the negative-mood cascade (higher = worse), used to
+    /// keep the worse of the blind-epoch and missed-interaction signals.
+    fn mood_severity(m: Mood) -> u8 {
+        match m {
+            Mood::Angry => 4,
+            Mood::Lonely => 3,
+            Mood::Sad => 2,
+            Mood::Bored => 1,
+            _ => 0,
+        }
+    }
+
     pub fn compute_mood(&self, epoch: &EpochState, peers: &[Peer]) -> Mood {
         // Handshakes captured this epoch trump everything.
         if epoch.handshakes_this_epoch > 0 {
@@ -237,6 +256,31 @@ impl Personality {
             Some(Mood::Bored)
         } else {
             None
+        };
+
+        // Missed-interaction backoff (pwnagotchi's `is_stale` -> lonely/angry):
+        // seeing APs but repeatedly failing to engage/capture makes the agent
+        // lonely once `num_missed` crosses `max_misses_for_recon`, and angry at
+        // twice that. This is independent of the blind-epoch cascade above
+        // (which covers "no APs at all"); we keep whichever signal is worse.
+        let missed = if self.config.max_misses_for_recon > 0 {
+            if epoch.num_missed >= self.config.max_misses_for_recon.saturating_mul(2) {
+                Some(Mood::Angry)
+            } else if epoch.num_missed >= self.config.max_misses_for_recon {
+                Some(Mood::Lonely)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let negative = match (negative, missed) {
+            (Some(a), Some(b)) => Some(if Self::mood_severity(a) >= Self::mood_severity(b) {
+                a
+            } else {
+                b
+            }),
+            (a, b) => a.or(b),
         };
 
         if let Some(neg) = negative {
@@ -401,6 +445,25 @@ mod tests {
         let time = p.calc_recon_time(&epoch);
         assert!(time >= 5);
         assert!(time <= 30);
+    }
+
+    #[test]
+    fn test_missed_interactions_trigger_lonely_then_angry() {
+        // A-2 recon backoff (pwnagotchi's `max_misses_for_recon`, default 5):
+        // seeing APs but repeatedly failing to engage -> lonely, then angry at
+        // 2x. Independent of the blind-epoch (no-AP) cascade.
+        let p = Personality::default();
+        let mut epoch = EpochState::new(1, Channel::new(1).unwrap());
+
+        epoch.num_missed = 4; // below threshold -> still an idle recon look
+        assert!(matches!(
+            p.compute_mood(&epoch, &[]),
+            Mood::LookR | Mood::LookL
+        ));
+        epoch.num_missed = 5; // == threshold -> lonely
+        assert_eq!(p.compute_mood(&epoch, &[]), Mood::Lonely);
+        epoch.num_missed = 10; // 2x threshold -> angry
+        assert_eq!(p.compute_mood(&epoch, &[]), Mood::Angry);
     }
 
     #[test]

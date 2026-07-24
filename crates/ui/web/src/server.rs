@@ -79,14 +79,18 @@ async fn basic_auth(
     req: Request,
     next: Next,
 ) -> Response {
-    let (user, pass) = {
+    let (auth_on, user, pass) = {
         let s = state.read().await;
         (
+            s.config.ui.web.auth,
             s.config.ui.web.username.clone(),
             s.config.ui.web.password.clone(),
         )
     };
-    if user.is_empty() || request_has_valid_basic_auth(&req, &user, &pass) {
+    // Gate on the explicit `ui.web.auth` flag (matches the config field and
+    // real pwnagotchi's toggle). Auth off, or no username configured to check
+    // against, => open. Otherwise require valid Basic credentials.
+    if !auth_on || user.is_empty() || request_has_valid_basic_auth(&req, &user, &pass) {
         return next.run(req).await;
     }
     (
@@ -203,6 +207,7 @@ mod tests {
         let state = Arc::new(RwLock::new(AppState::default()));
         {
             let mut s = state.write().await;
+            s.config.ui.web.auth = true;
             s.config.ui.web.username = "changeme".to_string();
             s.config.ui.web.password = "changeme".to_string();
         }
@@ -237,16 +242,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_empty_username_disables_auth() {
+    async fn test_auth_off_by_default_is_open() {
         use axum::body::Body;
         use axum::http::Request as HttpRequest;
         use tower::ServiceExt;
 
+        // Default config has `ui.web.auth = false` -> routes are open (matches
+        // the shipped overlay config; the daemon must not lock the user out).
         let state = Arc::new(RwLock::new(AppState::default()));
-        {
-            let mut s = state.write().await;
-            s.config.ui.web.username = String::new(); // opt out
-        }
         let router = create_router(state);
         let resp = router
             .oneshot(

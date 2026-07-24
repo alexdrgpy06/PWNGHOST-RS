@@ -1,5 +1,13 @@
 # PWNGHOST-RS ↔ Jayofelony Pwnagotchi Complete System Gap & Parity Matrix
 
+> ⚠️ **Reliability note (2026-07-24):** Several claims in this auto-generated
+> matrix did **not** survive source verification — a fabricated jay `/api/status`
+> endpoint, "idle voice cycling needed", "mood hooks unwired", "missing silence
+> tags", and the "peer network fallback" gap were all **REFUTED**. Treat every
+> row here as a *lead to verify*, not a fact. See **`VERIFY_SWEEP.md`** and
+> **`RUNTIME_PARITY_FIXES.md`** for the verified findings and what was actually
+> fixed.
+
 ## 1. Executive Overview
 
 This matrix presents a comprehensive, module-by-module audit comparing the reference Python implementation **jayofelony/pwnagotchi** (v2.9.5.5 clone / v2.8.9 release image) against **PWNGHOST-RS** (Rust daemon).
