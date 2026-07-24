@@ -93,7 +93,7 @@ impl Default for PersonalityConfig {
             hop_recon_time: 10,
             deauth: true,
             associate: true,
-            min_rssi: -80,
+            min_rssi: -200, // match pwnagotchi's default (no practical floor)
             position_x: 0,
             position_y: 34,
             frame_padding: true,

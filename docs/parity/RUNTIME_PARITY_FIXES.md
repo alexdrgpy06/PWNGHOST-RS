@@ -93,23 +93,50 @@ own, *despite* being in the LookL idle mood (proving the mood-gating removal). W
 
 ---
 
-## Remaining divergences (next steps, not yet fixed)
+## Session 2 — "better version" increment + verification corrections
 
-- **[VISUAL/VOICE · MED] Status line doesn't cycle idle lines.** `set_phrase` only
-  fires on an action, so between actions the phrase reverts to the mood's single
-  static line (`"..."` for recon). Real pwnagotchi's `voice.py` re-rolls a random
-  idle line periodically. See `VOICE_MOOD_FACE_DIFF.md`. Needs care — our code has a
-  deliberate "don't flicker every tick" design; the fix is to re-roll on a slower
-  cadence, not every 1s render.
-- **[VISUAL · LOW] Gaze animation.** Confirm the on-screen LookR/LookL actually
-  alternates (the display-side `animated_face` path). See `VOICE_MOOD_FACE_DIFF.md`.
-- **[LOGIC-GAP · LOW] `min_rssi` default.** `personality.rs` `Default` uses `-80`
-  vs pwnagotchi's `-200` (defaults.toml already uses -200, so the running value is
-  correct; only the hardcoded fallback is inconsistent).
-- **Hardware confirmation.** On the user's Pi, run the commands in
-  `HARDWARE_BOOT_AUDIT.md` (`iw dev`, `systemctl status bettercap`,
-  `journalctl -u bettercap -u pwnghost-rs`, and a manual
-  `curl -su pwnghost:pwnghost http://127.0.0.1:8081/api/session/wifi`) to confirm
+Several items flagged by the earlier auto-generated diffs **did not survive
+verification against the real pwnagotchi source** — recording them so the docs
+stay honest (the auto-generated `GAP_MATRIX.md` / `VOICE_MOOD_FACE_DIFF.md`
+overstate gaps, same as the fabricated `/api/status` finding):
+
+- **Voice/idle-line "cycling" — NOT a bug.** `pwnagotchi/voice.py::on_normal()`
+  returns `random.choice(['', '...'])` — the original shows blank or `"..."` during
+  normal recon. Our recon lines (`["...", "Looking around ..."]`) are already *more*
+  expressive. The "no message change" symptom was the pwning stall (fixed); the
+  status now changes on real events (`Deauthing…`/`Associating…`). **No change.**
+- **Mood hooks — already wired.** `PluginManager::fire_mood_hook` *is* called, from
+  `agent::Agent::tick()` (`lib.rs:181`) on every mood transition. The "implemented
+  but never called" claim was wrong. **No change.**
+- **Gaze animation — deliberately limited for e-ink.** `main.rs::animated_face` is a
+  stub by design: continuously alternating LookR/LookL would force an e-ink partial
+  refresh every ~1s (the original's `view.wait()` does this), wearing the panel out
+  in weeks — which is exactly why pwnagotchi e-ink setups commonly run `fps=0`. The
+  face still changes per-epoch (LookR↔LookL) and per-event, which is appropriate for
+  this hardware. Left as-is intentionally; revisit only with an `ui.fps` knob.
+
+**Fixes actually applied this session:**
+
+- **[BUG · HIGH] WebUI had no authentication.** Real pwnagotchi wraps every web route
+  in `with_auth` (`ui/web/handler.py:38+`); ours enforced nothing, so anyone on the
+  network could read captured handshakes/cracked passwords, rewrite config, and
+  reboot the unit. Added HTTP Basic auth middleware over the sensitive routes
+  (`/`, `/ui`, all `/api/*`) using `ui.web.username`/`password` (already in config,
+  never enforced — the "config exists, never wired" pattern). `/ws` + `/static` stay
+  open (browsers can't attach Basic auth to a WS handshake). Empty username opts out.
+  — `crates/ui/web/src/server.rs` (`basic_auth`, tests for 401/200/opt-out).
+- **[LOGIC-GAP · LOW] `min_rssi` fallback** `-80` → `-200` in `personality.rs`
+  `Default`, matching pwnagotchi (`defaults.toml` already used -200).
+
+`cargo test --workspace`: **208 passing, 0 failing.**
+
+## Still open
+
+- **Hardware confirmation.** On the Pi, run the commands in `HARDWARE_BOOT_AUDIT.md`
+  (`iw dev`, `systemctl status bettercap`, `journalctl -u bettercap -u pwnghost-rs`,
+  and `curl -su pwnghost:pwnghost http://127.0.0.1:8081/api/session/wifi`) to confirm
   whether the recon-race (fix 3) or an interface/firmware issue was the on-device
-  cause.
+  cause of the original "boots but never pwns".
+- **Matrix reliability.** `GAP_MATRIX.md` remaining rows should each be re-verified
+  against source before acting — several claims have not held up.
 ```
